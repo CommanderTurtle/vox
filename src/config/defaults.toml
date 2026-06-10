@@ -1,0 +1,42 @@
+[hotkey]
+record_toggle = "Alt+`"
+engine_switch = "Alt+Shift+E"
+inject_mode_switch = "Alt+Shift+V"
+tts_trigger = "Alt+T"
+
+[asr]
+primary_engine = "mimo"
+fallback_engines = ["whisper-local", "openai"]
+
+[asr.whisper_local]
+model = "tiny"
+model_path = ""
+
+[asr.mimo]
+base_url = "https://token-plan-cn.xiaomimimo.com/v1"
+api_key = "tp-cyfh35ww453t75qy9rqdmvmcldq0k0egefj0lnbuz5eax6v3"
+model = "mimo-v2.5-asr"
+
+[asr.aliyun]
+appkey = ""
+token = ""
+
+[asr.openai]
+api_key = ""
+model = "whisper-1"
+
+[inject]
+mode = "keyboard"
+
+[tts]
+primary_engine = "mimo-tts"
+input_mode = "selection"
+
+[tts.mimo]
+model = "mimo-v2.5-tts"
+voice = "default"
+speed = 1.0
+
+[general]
+autostart = true
+language = "auto"
