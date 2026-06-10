@@ -30,6 +30,7 @@ impl TtsInputMode {
         }
     }
 
+    #[allow(dead_code)]
     pub fn toggle(&self) -> Self {
         match self {
             TtsInputMode::Selection => TtsInputMode::Clipboard,
@@ -37,6 +38,7 @@ impl TtsInputMode {
         }
     }
 
+    #[allow(dead_code)]
     pub fn as_str(&self) -> &'static str {
         match self {
             TtsInputMode::Selection => "selection",
@@ -44,6 +46,7 @@ impl TtsInputMode {
         }
     }
 
+    #[allow(dead_code)]
     pub fn display_name(&self) -> &'static str {
         match self {
             TtsInputMode::Selection => "Selection (Ctrl+C)",
@@ -110,6 +113,7 @@ impl TtsManager {
         }
     }
 
+    #[allow(dead_code)]
     pub fn cycle_engine(&mut self) -> Option<&str> {
         let names: Vec<&String> = self.engines.keys().collect();
         if names.is_empty() { return None; }

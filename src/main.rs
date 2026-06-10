@@ -18,10 +18,6 @@ use crossbeam::channel;
 
 use app::hotkey::{HotkeyBinding, HotkeyEvent, start_hotkey_listener};
 use asr::AsrManager;
-use asr::whisper_local::WhisperLocalEngine;
-use asr::mimo_asr::MimoAsrEngine;
-use asr::openai_asr::OpenaiAsrEngine;
-use asr::aliyun_asr::AliyunAsrEngine;
 use audio::capture::AudioCapture;
 use audio::utils::pcm_to_wav;
 use config::ConfigManager;
@@ -50,6 +46,21 @@ struct AppCtx {
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+
+    // ── CLI subcommands (debug/testing) ──────────────────────────────────
+    let args: Vec<String> = std::env::args().collect();
+    if args.len() >= 2 {
+        match args[1].as_str() {
+            "transcribe" => {
+                return cmd_transcribe(&args[2..]);
+            }
+            "inject" => {
+                return cmd_inject(&args[2..]);
+            }
+            _ => {}
+        }
+    }
+
     log::info!("vox v{} starting...", env!("CARGO_PKG_VERSION"));
 
     // ── Load configuration ────────────────────────────────────────────────
@@ -84,63 +95,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     // ── Initialize ASR manager ───────────────────────────────────────────
-    let (primary_engine, fallback_engines) = {
-        let cfg = config_mgr.read();
-        (cfg.asr.primary_engine.clone(), cfg.asr.fallback_engines.clone())
-    };
-
-    let mut asr_mgr = AsrManager::new(primary_engine.clone(), fallback_engines);
-
-    // Register whisper-local
-    let _ = WhisperLocalEngine::new("");
-    if let Ok(engine) = WhisperLocalEngine::new("") {
-        asr_mgr.register(Box::new(engine));
-    } else {
-        log::warn!("whisper-local engine not available");
-    }
-
-    // Register Mimo ASR engine
-    {
-        let cfg = config_mgr.read();
-        let mimo_cfg = &cfg.asr.mimo;
-        if !mimo_cfg.api_key.is_empty() {
-            log::info!("Registering Mimo ASR engine: {} at {}", mimo_cfg.model, mimo_cfg.base_url);
-            let engine = MimoAsrEngine::new(&mimo_cfg.base_url, &mimo_cfg.api_key, &mimo_cfg.model);
-            asr_mgr.register(Box::new(engine));
-        } else {
-            log::warn!("Mimo ASR engine skipped: no api_key configured");
-        }
-    }
-
-    // Register OpenAI Whisper API engine
-    {
-        let cfg = config_mgr.read();
-        let openai_cfg = &cfg.asr.openai;
-        if !openai_cfg.api_key.is_empty() {
-            log::info!("Registering OpenAI Whisper API engine");
-            let engine = OpenaiAsrEngine::new(
-                "https://api.openai.com/v1",
-                &openai_cfg.api_key,
-                &openai_cfg.model,
-            );
-            asr_mgr.register(Box::new(engine));
-        } else {
-            log::info!("OpenAI engine skipped: no api_key configured");
-        }
-    }
-
-    // Register Aliyun ASR engine
-    {
-        let cfg = config_mgr.read();
-        let aliyun_cfg = &cfg.asr.aliyun;
-        if !aliyun_cfg.appkey.is_empty() && !aliyun_cfg.token.is_empty() {
-            log::info!("Registering Aliyun ASR engine");
-            let engine = AliyunAsrEngine::new(&aliyun_cfg.appkey, &aliyun_cfg.token);
-            asr_mgr.register(Box::new(engine));
-        } else {
-            log::info!("Aliyun engine skipped: no appkey/token configured");
-        }
-    }
+    let asr_mgr = build_asr_manager(&config_mgr);
 
     // ── Initialize TTS manager ───────────────────────────────────────────
     let mut tts_mgr = TtsManager::new("mimo-tts".to_string());
@@ -444,4 +399,106 @@ fn toggle_recording(ctx: &mut AppCtx) {
             }
         }
     }
+}
+
+// ── CLI debug subcommands ─────────────────────────────────────────────
+
+/// `cargo run -- transcribe <audio.wav>`
+fn cmd_transcribe(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+    let path = args.first().ok_or("Usage: vox transcribe <audio.wav>")?;
+    let wav_bytes = std::fs::read(path)?;
+    log::info!("Read {} bytes from {}", wav_bytes.len(), path);
+
+    let config_mgr = ConfigManager::load_or_create()?;
+    let asr_mgr = build_asr_manager(&config_mgr);
+
+    let rt = tokio::runtime::Runtime::new()?;
+    let result = rt.block_on(asr_mgr.transcribe(&wav_bytes));
+
+    match result {
+        Ok(text) => { println!("{}", text); Ok(()) }
+        Err(e) => { eprintln!("ASR failed: {}", e); std::process::exit(1); }
+    }
+}
+
+/// `cargo run -- inject <text> [--mode keyboard|clipboard]`
+fn cmd_inject(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+    if args.is_empty() {
+        return Err("Usage: vox inject <text> [--mode keyboard|clipboard]".into());
+    }
+
+    let mut text = String::new();
+    let mut mode = InjectMode::Keyboard;
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--mode" => {
+                i += 1;
+                mode = match args.get(i).map(|s| s.as_str()) {
+                    Some("clipboard") => InjectMode::Clipboard,
+                    _ => InjectMode::Keyboard,
+                };
+            }
+            s => {
+                if !text.is_empty() { text.push(' '); }
+                text.push_str(s);
+            }
+        }
+        i += 1;
+    }
+
+    log::info!("Injecting {} chars via {:?}", text.len(), mode);
+    inject_text(&text, mode)?;
+    log::info!("Injection complete.");
+    Ok(())
+}
+
+fn build_asr_manager(config_mgr: &ConfigManager) -> AsrManager {
+    use asr::whisper_local::WhisperLocalEngine;
+    use asr::mimo_asr::MimoAsrEngine;
+    use asr::openai_asr::OpenaiAsrEngine;
+    use asr::aliyun_asr::AliyunAsrEngine;
+
+    let (primary_engine, fallback_engines) = {
+        let cfg = config_mgr.read();
+        (cfg.asr.primary_engine.clone(), cfg.asr.fallback_engines.clone())
+    };
+
+    let mut asr_mgr = AsrManager::new(primary_engine, fallback_engines);
+
+    if let Ok(engine) = WhisperLocalEngine::new("") {
+        asr_mgr.register(Box::new(engine));
+    } else {
+        log::warn!("whisper-local engine not available");
+    }
+
+    {
+        let cfg = config_mgr.read();
+        let mimo_cfg = &cfg.asr.mimo;
+        if !mimo_cfg.api_key.is_empty() {
+            log::info!("Registering Mimo ASR engine: {} at {}", mimo_cfg.model, mimo_cfg.base_url);
+            asr_mgr.register(Box::new(MimoAsrEngine::new(&mimo_cfg.base_url, &mimo_cfg.api_key, &mimo_cfg.model)));
+        }
+    }
+
+    {
+        let cfg = config_mgr.read();
+        let openai_cfg = &cfg.asr.openai;
+        if !openai_cfg.api_key.is_empty() {
+            log::info!("Registering OpenAI Whisper API engine");
+            asr_mgr.register(Box::new(OpenaiAsrEngine::new("https://api.openai.com/v1", &openai_cfg.api_key, &openai_cfg.model)));
+        }
+    }
+
+    {
+        let cfg = config_mgr.read();
+        let aliyun_cfg = &cfg.asr.aliyun;
+        if !aliyun_cfg.appkey.is_empty() && !aliyun_cfg.token.is_empty() {
+            log::info!("Registering Aliyun ASR engine");
+            asr_mgr.register(Box::new(AliyunAsrEngine::new(&aliyun_cfg.appkey, &aliyun_cfg.token)));
+        }
+    }
+
+    asr_mgr
 }

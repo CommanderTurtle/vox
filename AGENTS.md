@@ -19,6 +19,8 @@ Voice I/O companion for CLI AI agents — system-tray app providing global ASR (
 | Test | `cargo test` |
 | Debug logging | `RUST_LOG=debug cargo run` |
 | Build with local whisper | `cargo build --features whisper-local` |
+| CLI: transcribe file | `cargo run -- transcribe <file.wav>` |
+| CLI: inject text | `cargo run -- inject <text> [--mode keyboard\|clipboard]` |
 
 ## Architecture
 
@@ -43,6 +45,7 @@ main.rs (event loop: crossbeam::select! tray events × hotkey events)
 ├── config/      — mod.rs (ConfigManager: load/save TOML, RwLock, serde(default) for backwards compat)
 ├── tray/        — mod.rs (dedicated thread with Windows message pump, tray-icon + menu)
 ├── settings/    — mod.rs (egui/eframe window, spawned in own thread)
+├── scripts/     — build-whisper / install-service / install-autostart / package
 ```
 
 ### Key patterns
