@@ -23,7 +23,7 @@ use audio::utils::{pcm_to_wav, resample_linear};
 use config::ConfigManager;
 use inject::{InjectMode, inject_text};
 use app::state::AppState;
-use tray::{TrayEvent, TrayCommand, spawn_tray, update_tray_state};
+use tray::{TrayEvent, TrayCommand, MenuModel, spawn_tray, refresh_menu};
 use tts::TtsManager;
 use tts::TtsInputMode;
 use tts::mimo_tts::MimoTtsEngine;
@@ -52,10 +52,8 @@ struct AppCtx {
     runtime: tokio::runtime::Runtime,
     /// Sender for ASR results posted from background tasks.
     asr_result_tx: channel::Sender<AsrResult>,
-    /// Notified by the settings window after a save, to trigger a live reload.
-    config_reload_tx: channel::Sender<()>,
-    /// Path to config file (for settings window).
-    config_path: std::path::PathBuf,
+    /// Settings window sends the edited config snapshot here on save.
+    settings_save_tx: channel::Sender<config::Config>,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -112,32 +110,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let asr_mgr: Arc<AsrManager> = Arc::new(build_asr_manager(&config_mgr));
 
     // ── Initialize TTS manager ───────────────────────────────────────────
-    let mut tts_mgr = TtsManager::new("mimo-tts".to_string());
-
-    // Register Mimo TTS engine
-    {
-        let cfg = config_mgr.read();
-        let mimo_cfg = &cfg.asr.mimo; // share base URL and API key with ASR
-        let tts_cfg = &cfg.tts.mimo;
-        if !mimo_cfg.api_key.is_empty() {
-            log::info!("Registering Mimo TTS engine: {} at {}", tts_cfg.model, mimo_cfg.base_url);
-            let engine = MimoTtsEngine::new(&mimo_cfg.base_url, &mimo_cfg.api_key, &tts_cfg.model);
-            tts_mgr.register(Box::new(engine));
-        } else {
-            log::warn!("Mimo TTS engine skipped: no api_key configured");
-        }
-    }
-    let tts_mgr: Arc<TtsManager> = Arc::new(tts_mgr);
+    let tts_mgr: Arc<TtsManager> = Arc::new(build_tts_manager(&config_mgr));
 
     let inject_mode = InjectMode::from_config(&config_mgr.read());
     let tts_input_mode = TtsInputMode::from_config(&config_mgr.read());
 
     // ── Build system tray (dedicated thread with message pump) ───────────
     let (tray_event_sender, tray_event_receiver) = channel::unbounded::<TrayEvent>();
-    let engines = asr_mgr.engine_names();
-    let tts_engines = tts_mgr.engine_names();
 
-    let (tray_cmd_tx, _tray_handle) = spawn_tray(&engines, &tts_engines, tray_event_sender.clone());
+    let initial_model = MenuModel {
+        asr_engines: asr_mgr.engine_names(),
+        asr_active: asr_mgr.active_engine(),
+        inject_mode: inject_mode.as_str().to_string(),
+        tts_engines: tts_mgr.engine_names(),
+        tts_active: tts_mgr.active_engine(),
+        tts_input_mode: tts_input_mode.as_str().to_string(),
+        app_state: AppState::Idle,
+    };
+    let (tray_cmd_tx, _tray_handle) = spawn_tray(initial_model, tray_event_sender.clone());
 
     // ── Start global hotkey listener ──────────────────────────────────────
     let (hotkey_sender, hotkey_receiver) = channel::unbounded::<HotkeyEvent>();
@@ -160,13 +150,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .build()?;
     let (asr_result_tx, asr_result_rx) = channel::unbounded::<AsrResult>();
 
-    // Channel for "settings saved" notifications from the settings window,
-    // so the running app can reload config and apply changes live.
-    let (config_reload_tx, config_reload_rx) = channel::unbounded::<()>();
+    // Channel for the settings window to deliver an edited config snapshot
+    // on save; the main thread persists + applies it live.
+    let (settings_save_tx, settings_save_rx) = channel::unbounded::<config::Config>();
 
     // ── Application context ──────────────────────────────────────────────
     let mut ctx = AppCtx {
-        config_path: config_mgr.path().clone(),
         config_mgr,
         asr_mgr,
         tts_mgr,
@@ -176,7 +165,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         capture: None,
         runtime,
         asr_result_tx,
-        config_reload_tx,
+        settings_save_tx,
     };
 
     // ── Main event loop (NO Windows message pump needed here) ────────────
@@ -200,14 +189,34 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     handle_asr_result(&mut ctx, result);
                 }
             }
-            recv(config_reload_rx) -> _msg => {
-                handle_config_reload(&mut ctx);
+            recv(settings_save_rx) -> msg => {
+                if let Ok(new_cfg) = msg {
+                    apply_settings(&mut ctx, new_cfg);
+                }
             }
         }
     }
 
     log::info!("vox shutdown complete.");
     Ok(())
+}
+
+/// Build a snapshot of the tray menu model from the live context.
+fn build_menu_model(ctx: &AppCtx, app_state: AppState) -> MenuModel {
+    MenuModel {
+        asr_engines: ctx.asr_mgr.engine_names(),
+        asr_active: ctx.asr_mgr.active_engine(),
+        inject_mode: ctx.inject_mode.as_str().to_string(),
+        tts_engines: ctx.tts_mgr.engine_names(),
+        tts_active: ctx.tts_mgr.active_engine(),
+        tts_input_mode: ctx.tts_input_mode.as_str().to_string(),
+        app_state,
+    }
+}
+
+/// Push a refreshed menu + tooltip to the tray thread.
+fn push_tray(ctx: &AppCtx, app_state: AppState) {
+    refresh_menu(&ctx.tray_cmd_tx, build_menu_model(ctx, app_state));
 }
 
 /// Handle a tray event. Returns false if the app should quit.
@@ -219,8 +228,8 @@ fn handle_tray_event(ctx: &mut AppCtx, msg: Result<TrayEvent, crossbeam::channel
         }
         Ok(TrayEvent::OpenSettings) => {
             log::info!("Opening settings window...");
-            let path = ctx.config_path.clone();
-            settings::spawn_settings_window(&path, ctx.config_reload_tx.clone());
+            let snapshot = ctx.config_mgr.read().clone();
+            settings::spawn_settings_window(snapshot, ctx.settings_save_tx.clone());
         }
         Ok(TrayEvent::SetEngine(name)) => {
             log::info!("Switching engine to: {}", name);
@@ -231,6 +240,7 @@ fn handle_tray_event(ctx: &mut AppCtx, msg: Result<TrayEvent, crossbeam::channel
             cfg.asr.primary_engine = name;
             drop(cfg);
             let _ = ctx.config_mgr.save();
+            push_tray(ctx, AppState::Idle);
         }
         Ok(TrayEvent::SetInjectMode(mode)) => {
             log::info!("Switching inject mode to: {}", mode);
@@ -242,6 +252,7 @@ fn handle_tray_event(ctx: &mut AppCtx, msg: Result<TrayEvent, crossbeam::channel
             cfg.inject.mode = mode;
             drop(cfg);
             let _ = ctx.config_mgr.save();
+            push_tray(ctx, AppState::Idle);
         }
         Ok(TrayEvent::SetTtsEngine(name)) => {
             log::info!("Switching TTS engine to: {}", name);
@@ -252,6 +263,7 @@ fn handle_tray_event(ctx: &mut AppCtx, msg: Result<TrayEvent, crossbeam::channel
             cfg.tts.primary_engine = name;
             drop(cfg);
             let _ = ctx.config_mgr.save();
+            push_tray(ctx, AppState::Idle);
         }
         Ok(TrayEvent::SetTtsInputMode(mode)) => {
             log::info!("Switching TTS input mode to: {}", mode);
@@ -263,6 +275,7 @@ fn handle_tray_event(ctx: &mut AppCtx, msg: Result<TrayEvent, crossbeam::channel
             cfg.tts.input_mode = mode;
             drop(cfg);
             let _ = ctx.config_mgr.save();
+            push_tray(ctx, AppState::Idle);
         }
         Ok(TrayEvent::ToggleRecording) => {
             toggle_recording(ctx);
@@ -287,6 +300,7 @@ fn handle_hotkey_event(ctx: &mut AppCtx, event: HotkeyEvent) {
                 cfg.asr.primary_engine = name.to_string();
                 drop(cfg);
                 let _ = ctx.config_mgr.save();
+                push_tray(ctx, AppState::Idle);
             }
         }
         HotkeyEvent::InjectModeSwitch => {
@@ -296,6 +310,7 @@ fn handle_hotkey_event(ctx: &mut AppCtx, event: HotkeyEvent) {
             cfg.inject.mode = ctx.inject_mode.as_str().to_string();
             drop(cfg);
             let _ = ctx.config_mgr.save();
+            push_tray(ctx, AppState::Idle);
         }
         HotkeyEvent::TtsTrigger => {
             log::info!("[Hotkey] TTS trigger");
@@ -384,7 +399,7 @@ fn toggle_recording(ctx: &mut AppCtx) {
             samples.len() as f64 / device_rate as f64
         );
 
-        update_tray_state(&ctx.tray_cmd_tx, AppState::Transcribing);
+        push_tray(ctx, AppState::Transcribing);
 
         // Resample to 16 kHz (what ASR engines expect) and encode to WAV.
         // Done in a blocking task so heavy resampling doesn't stall the
@@ -394,7 +409,7 @@ fn toggle_recording(ctx: &mut AppCtx) {
             Ok(b) => b,
             Err(e) => {
                 log::error!("WAV encoding failed: {}", e);
-                update_tray_state(&ctx.tray_cmd_tx, AppState::Idle);
+                push_tray(ctx, AppState::Idle);
                 return;
             }
         };
@@ -420,7 +435,7 @@ fn toggle_recording(ctx: &mut AppCtx) {
         log::info!("Starting recording...");
         match AudioCapture::start() {
             Ok(capture) => {
-                update_tray_state(&ctx.tray_cmd_tx, AppState::Recording);
+                push_tray(ctx, AppState::Recording);
                 ctx.capture = Some(capture);
                 log::info!("Recording started.");
             }
@@ -444,46 +459,33 @@ fn handle_asr_result(ctx: &mut AppCtx, result: AsrResult) {
             log::error!("ASR failed: {}", msg);
         }
     }
-    update_tray_state(&ctx.tray_cmd_tx, AppState::Idle);
+    push_tray(ctx, AppState::Idle);
 }
 
-/// Reload the config from disk and apply changes live (engines, inject mode,
-/// TTS input mode) without restarting the app.
-///
-/// Note: the tray menu's engine list is built once at startup and is not
-/// rebuilt here — engine name changes in settings take effect on next launch.
-fn handle_config_reload(ctx: &mut AppCtx) {
-    log::info!("Config changed externally — reloading live...");
-
-    if let Err(e) = ctx.config_mgr.reload_from_disk() {
-        log::error!("Failed to reload config: {}", e);
-        return;
-    }
-
-    // Rebuild engine managers from the freshly loaded config.
-    ctx.asr_mgr = Arc::new(build_asr_manager(&ctx.config_mgr));
-
-    // Rebuild TTS manager.
-    let mut tts_mgr = TtsManager::new("mimo-tts".to_string());
+/// Apply an edited config snapshot delivered from the settings window:
+/// persist it, rebuild engine managers, refresh runtime modes, and refresh
+/// the tray menu — all live, no restart.
+fn apply_settings(ctx: &mut AppCtx, new_cfg: config::Config) {
+    log::info!("Applying settings from settings window...");
     {
-        let cfg = ctx.config_mgr.read();
-        let mimo_cfg = &cfg.asr.mimo;
-        let tts_cfg = &cfg.tts.mimo;
-        if !mimo_cfg.api_key.is_empty() {
-            let engine = MimoTtsEngine::new(&mimo_cfg.base_url, &mimo_cfg.api_key, &tts_cfg.model);
-            tts_mgr.register(Box::new(engine));
-        }
+        let mut g = ctx.config_mgr.write();
+        *g = new_cfg;
     }
-    ctx.tts_mgr = Arc::new(tts_mgr);
+    if let Err(e) = ctx.config_mgr.save() {
+        log::error!("Failed to persist config: {}", e);
+    }
 
-    // Refresh runtime modes from the reloaded config.
+    ctx.asr_mgr = Arc::new(build_asr_manager(&ctx.config_mgr));
+    ctx.tts_mgr = Arc::new(build_tts_manager(&ctx.config_mgr));
     ctx.inject_mode = InjectMode::from_config(&ctx.config_mgr.read());
     ctx.tts_input_mode = TtsInputMode::from_config(&ctx.config_mgr.read());
 
+    push_tray(ctx, AppState::Idle);
     log::info!(
-        "Live reload complete | engine={} | inject={:?} | tts_input={:?}",
+        "Settings applied | engine={} | inject={:?} | tts={} | tts_input={:?}",
         ctx.asr_mgr.active_engine(),
         ctx.inject_mode,
+        ctx.tts_mgr.active_engine(),
         ctx.tts_input_mode,
     );
 }
@@ -543,6 +545,7 @@ fn cmd_inject(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
 
 fn build_asr_manager(config_mgr: &ConfigManager) -> AsrManager {
     use asr::whisper_local::WhisperLocalEngine;
+    use asr::whisper_cpp::WhisperCppEngine;
     use asr::mimo_asr::MimoAsrEngine;
     use asr::openai_asr::OpenaiAsrEngine;
     use asr::aliyun_asr::AliyunAsrEngine;
@@ -553,6 +556,16 @@ fn build_asr_manager(config_mgr: &ConfigManager) -> AsrManager {
     };
 
     let mut asr_mgr = AsrManager::new(primary_engine, fallback_engines);
+
+    // whisper.cpp HTTP server — registered unconditionally; it's just an
+    // HTTP client. Fails at transcribe time (and triggers fallback) if the
+    // server isn't running.
+    {
+        let cfg = config_mgr.read();
+        let wcpp_cfg = &cfg.asr.whisper_cpp;
+        log::info!("Registering whisper.cpp ASR engine at {}", wcpp_cfg.base_url);
+        asr_mgr.register(Box::new(WhisperCppEngine::new(&wcpp_cfg.base_url)));
+    }
 
     // Whisper local engine — only registers when a model path is configured
     // AND the `whisper-local` feature was enabled at compile time.
@@ -569,21 +582,30 @@ fn build_asr_manager(config_mgr: &ConfigManager) -> AsrManager {
         }
     }
 
+    // OpenAI-compatible endpoint — registered unconditionally so it can be
+    // pointed at a local server (base_url). Without an api_key it will only
+    // work against auth-less local servers.
+    {
+        let cfg = config_mgr.read();
+        let openai_cfg = &cfg.asr.openai;
+        log::info!(
+            "Registering OpenAI-compatible ASR engine at {} (model {})",
+            openai_cfg.base_url,
+            openai_cfg.model
+        );
+        asr_mgr.register(Box::new(OpenaiAsrEngine::new(
+            &openai_cfg.base_url,
+            &openai_cfg.api_key,
+            &openai_cfg.model,
+        )));
+    }
+
     {
         let cfg = config_mgr.read();
         let mimo_cfg = &cfg.asr.mimo;
         if !mimo_cfg.api_key.is_empty() {
             log::info!("Registering Mimo ASR engine: {} at {}", mimo_cfg.model, mimo_cfg.base_url);
             asr_mgr.register(Box::new(MimoAsrEngine::new(&mimo_cfg.base_url, &mimo_cfg.api_key, &mimo_cfg.model)));
-        }
-    }
-
-    {
-        let cfg = config_mgr.read();
-        let openai_cfg = &cfg.asr.openai;
-        if !openai_cfg.api_key.is_empty() {
-            log::info!("Registering OpenAI Whisper API engine");
-            asr_mgr.register(Box::new(OpenaiAsrEngine::new("https://api.openai.com/v1", &openai_cfg.api_key, &openai_cfg.model)));
         }
     }
 
@@ -597,4 +619,40 @@ fn build_asr_manager(config_mgr: &ConfigManager) -> AsrManager {
     }
 
     asr_mgr
+}
+
+/// Build the TTS manager from config: Edge TTS (free, always) + Mimo TTS
+/// (when an API key is present).
+fn build_tts_manager(config_mgr: &ConfigManager) -> TtsManager {
+    use tts::edge_tts::EdgeTtsEngine;
+
+    let primary = {
+        let cfg = config_mgr.read();
+        cfg.tts.primary_engine.clone()
+    };
+    let mut tts_mgr = TtsManager::new(primary);
+
+    // Edge TTS — free, no API key. Always registered.
+    {
+        let cfg = config_mgr.read();
+        let edge = &cfg.tts.edge;
+        log::info!("Registering Edge TTS engine (voice={})", edge.voice);
+        tts_mgr.register(Box::new(EdgeTtsEngine::new(
+            &edge.voice, &edge.rate, &edge.volume, &edge.pitch,
+        )));
+    }
+
+    // Mimo TTS — only when an API key is configured.
+    {
+        let cfg = config_mgr.read();
+        let mimo_cfg = &cfg.asr.mimo; // share base URL and API key with ASR
+        let tts_cfg = &cfg.tts.mimo;
+        if !mimo_cfg.api_key.is_empty() {
+            log::info!("Registering Mimo TTS engine: {} at {}", tts_cfg.model, mimo_cfg.base_url);
+            let engine = MimoTtsEngine::new(&mimo_cfg.base_url, &mimo_cfg.api_key, &tts_cfg.model);
+            tts_mgr.register(Box::new(engine));
+        }
+    }
+
+    tts_mgr
 }

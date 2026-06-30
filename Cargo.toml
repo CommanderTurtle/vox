@@ -27,6 +27,14 @@ arboard = "3"
 # HTTP client (for cloud ASR APIs)
 reqwest = { version = "0.12", features = ["json", "multipart"] }
 
+# WebSocket client (for Microsoft Edge TTS, no API key required)
+tokio-tungstenite = { version = "0.23", features = ["rustls-tls-native-roots"] }
+futures-util = "0.3"
+
+# SHA-256 (for Edge TTS Sec-MS-GEC token) and ISO-8601 timestamps
+sha2 = "0.10"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+
 # Config
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

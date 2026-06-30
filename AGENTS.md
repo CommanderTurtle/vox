@@ -7,7 +7,7 @@ Voice I/O companion for CLI AI agents — system-tray app providing global ASR (
 - **Stack**: Rust 2021 edition, tokio async, crossbeam channels, tray-icon, cpal (audio), rdev (hotkeys), egui (settings UI)
 - **Entry**: `src/main.rs` — initializes config, engines, tray, hotkeys, then enters crossbeam::select! event loop
 - **Config**: TOML at platform config dir (`com.vox/vox/`); `defaults.toml` embedded via `include_str!`
-- **Default engine**: Mimo AI (ASR `mimo-v2.5-asr` + TTS `mimo-v2.5-tts`) — configured at compile time in defaults.toml
+- **Default engines**: local ASR (`whisper-cpp` HTTP server, with `openai`-compatible fallback) + free **Edge TTS** (no API key). Mimo/Aliyun cloud engines register only when keys are configured.
 
 ## Commands
 
@@ -29,8 +29,9 @@ main.rs (event loop: crossbeam::select! tray events × hotkey events)
 ├── app/         — state.rs (AppState: Idle/Recording/Transcribing)
 │                  hotkey.rs (HotkeyBinding parser, rdev listener thread)
 ├── asr/         — mod.rs (AsrEngine trait + AsrManager + fallback chain)
+│                  whisper_cpp.rs (local whisper.cpp HTTP server, /inference)
 │                  mimo_asr.rs (Mimo chat completions API, input_audio data URL)
-│                  openai_asr.rs (standard Whisper API, multipart)
+│                  openai_asr.rs (OpenAI-compatible /audio/transcriptions, multipart; base_url configurable for localhost)
 │                  aliyun_asr.rs (nls-gateway REST, raw PCM body)
 │                  whisper_local.rs (whisper.cpp FFI, feature-gated)
 ├── audio/       — capture.rs (cpal microphone, 16kHz mono i16 PCM, bg thread)
@@ -40,6 +41,7 @@ main.rs (event loop: crossbeam::select! tray events × hotkey events)
 │                  clipboard.rs (arboard + enigo Ctrl+V, save/restore)
 │                  text_reader.rs (read selected text via Ctrl+C simulation)
 ├── tts/         — mod.rs (TtsEngine trait + TtsManager + TtsInputMode enum)
+│                  edge_tts.rs (free Microsoft Edge TTS over WebSocket, no API key; requests WAV)
 │                  mimo_tts.rs (Mimo chat completions, base64 PCM → WAV)
 │                  playback.rs (temp WAV → system player: powershell/afplay/aplay)
 ├── config/      — mod.rs (ConfigManager: load/save TOML, RwLock, serde(default) for backwards compat)

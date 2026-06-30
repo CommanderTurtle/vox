@@ -1,42 +1,35 @@
 //! Minimal settings window using egui.
 //!
-//! Spawned from the tray menu "Settings". Runs in its own thread so the
-//! main event loop is not blocked. Reads/writes the TOML config file.
-
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+//! ## Decoupling
+//! The window holds a plain `Config` *snapshot* and edits it in memory. On
+//! save it sends the edited snapshot back to the main thread through a
+//! channel; the main thread owns persistence (writing TOML) and applies the
+//! changes live. This module never touches the filesystem or `toml` — it is
+//! a pure view over a plain-data struct.
 
 use eframe::egui;
 
 use crate::config::Config;
 
 /// Spawn the settings window in a new thread.
-/// Returns immediately; the window runs independently.
 ///
-/// `reload_tx` is notified after the user saves, so the running app can
-/// reload the config and apply changes live (no restart needed).
+/// `initial` is the current config snapshot to edit. `save_tx` receives the
+/// edited snapshot when the user saves, so the backend can persist + apply it.
 pub fn spawn_settings_window(
-    config_path: &std::path::Path,
-    reload_tx: crossbeam::channel::Sender<()>,
+    initial: Config,
+    save_tx: crossbeam::channel::Sender<Config>,
 ) {
-    let path = config_path.to_path_buf();
-    let running = Arc::new(AtomicBool::new(true));
-    let running_clone = running.clone();
-
     std::thread::spawn(move || {
-        let config = load_config(&path);
-
         let options = eframe::NativeOptions {
             viewport: egui::ViewportBuilder::default()
-                .with_inner_size([480.0, 520.0]),
+                .with_inner_size([500.0, 640.0])
+                .with_resizable(true),
             ..Default::default()
         };
 
         let app = SettingsApp {
-            path,
-            config: config.into(),
-            running: running_clone,
-            reload_tx,
+            config: initial,
+            save_tx,
         };
 
         if let Err(e) = eframe::run_native(
@@ -49,131 +42,35 @@ pub fn spawn_settings_window(
     });
 }
 
-fn load_config(path: &std::path::Path) -> Config {
-    if path.exists() {
-        std::fs::read_to_string(path)
-            .ok()
-            .and_then(|s| toml::from_str(&s).ok())
-            .unwrap_or_default()
-    } else {
-        Config::default()
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Egui app
 // ---------------------------------------------------------------------------
 
 struct SettingsApp {
-    path: std::path::PathBuf,
-    config: Box<Config>,
-    running: Arc<AtomicBool>,
-    reload_tx: crossbeam::channel::Sender<()>,
+    config: Config,
+    save_tx: crossbeam::channel::Sender<Config>,
 }
 
 impl eframe::App for SettingsApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        if !self.running.load(Ordering::Relaxed) {
-            ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
-            return;
-        }
-
         egui::CentralPanel::default().show_inside(ui, |ui| {
             egui::ScrollArea::vertical().show(ui, |ui| {
                 ui.heading("vox Settings");
                 ui.separator();
                 ui.add_space(8.0);
 
-                // Hotkeys
-                ui.label(egui::RichText::new("Hotkeys").strong());
-                ui.horizontal(|ui| {
-                    ui.label("Record Toggle:");
-                    ui.add(egui::TextEdit::singleline(&mut self.config.hotkey.record_toggle));
-                });
-                ui.horizontal(|ui| {
-                    ui.label("Switch Engine: ");
-                    ui.add(egui::TextEdit::singleline(&mut self.config.hotkey.engine_switch));
-                });
-                ui.horizontal(|ui| {
-                    ui.label("Switch Inject: ");
-                    ui.add(egui::TextEdit::singleline(&mut self.config.hotkey.inject_mode_switch));
-                });
-                ui.add_space(12.0);
+                self.render_hotkeys(ui);
+                self.render_asr(ui);
+                self.render_inject(ui);
+                self.render_tts(ui);
+                self.render_general(ui);
 
-                // Engine selection
-                ui.label(egui::RichText::new("Engine").strong());
-                egui::ComboBox::from_label("Primary")
-                    .selected_text(&self.config.asr.primary_engine)
-                    .show_ui(ui, |ui| {
-                        ui.selectable_value(&mut self.config.asr.primary_engine, "mimo".to_string(), "Mimo AI");
-                        ui.selectable_value(&mut self.config.asr.primary_engine, "openai".to_string(), "OpenAI Whisper");
-                        ui.selectable_value(&mut self.config.asr.primary_engine, "aliyun".to_string(), "Aliyun ASR");
-                        ui.selectable_value(&mut self.config.asr.primary_engine, "whisper-local".to_string(), "Whisper Local");
-                    });
-                ui.add_space(12.0);
-
-                // Mimo config
-                ui.label(egui::RichText::new("Mimo ASR").strong());
-                ui.horizontal(|ui| {
-                    ui.label("Base URL:");
-                    ui.add(egui::TextEdit::singleline(&mut self.config.asr.mimo.base_url));
-                });
-                ui.horizontal(|ui| {
-                    ui.label("API Key: ");
-                    ui.add(egui::TextEdit::singleline(&mut self.config.asr.mimo.api_key).password(true));
-                });
-                ui.horizontal(|ui| {
-                    ui.label("Model:   ");
-                    ui.add(egui::TextEdit::singleline(&mut self.config.asr.mimo.model));
-                });
-                ui.add_space(12.0);
-
-                // OpenAI config
-                ui.label(egui::RichText::new("OpenAI Whisper").strong());
-                ui.horizontal(|ui| {
-                    ui.label("API Key: ");
-                    ui.add(egui::TextEdit::singleline(&mut self.config.asr.openai.api_key).password(true));
-                });
-                ui.horizontal(|ui| {
-                    ui.label("Model:   ");
-                    ui.add(egui::TextEdit::singleline(&mut self.config.asr.openai.model));
-                });
-                ui.add_space(12.0);
-
-                // Aliyun config
-                ui.label(egui::RichText::new("Aliyun ASR").strong());
-                ui.horizontal(|ui| {
-                    ui.label("Appkey: ");
-                    ui.add(egui::TextEdit::singleline(&mut self.config.asr.aliyun.appkey));
-                });
-                ui.horizontal(|ui| {
-                    ui.label("Token:  ");
-                    ui.add(egui::TextEdit::singleline(&mut self.config.asr.aliyun.token).password(true));
-                });
-                ui.add_space(12.0);
-
-                // Inject mode
-                ui.label(egui::RichText::new("Inject Mode").strong());
-                egui::ComboBox::from_label("Mode")
-                    .selected_text(&self.config.inject.mode)
-                    .show_ui(ui, |ui| {
-                        ui.selectable_value(&mut self.config.inject.mode, "keyboard".to_string(), "Keyboard");
-                        ui.selectable_value(&mut self.config.inject.mode, "clipboard".to_string(), "Clipboard");
-                    });
-                ui.add_space(12.0);
-
-                // General
-                ui.label(egui::RichText::new("General").strong());
-                ui.checkbox(&mut self.config.general.autostart, "Autostart");
-                ui.add_space(16.0);
-
-                // Save / Cancel
                 ui.separator();
                 ui.horizontal(|ui| {
                     if ui.button("💾 Save && Close").clicked() {
-                        self.save_config();
-                        // Notify the running app to reload config from disk.
-                        let _ = self.reload_tx.send(());
+                        // Hand the edited snapshot to the backend; it owns
+                        // persistence and live application.
+                        let _ = self.save_tx.send(self.config.clone());
                         ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
                     }
                     if ui.button("✕ Cancel").clicked() {
@@ -186,18 +83,178 @@ impl eframe::App for SettingsApp {
 }
 
 impl SettingsApp {
-    fn save_config(&self) {
-        match toml::to_string_pretty(&*self.config) {
-            Ok(raw) => {
-                if let Err(e) = std::fs::write(&self.path, &raw) {
-                    log::error!("Failed to save config: {}", e);
-                } else {
-                    log::info!("Settings saved to {:?}", self.path);
+    fn render_hotkeys(&mut self, ui: &mut egui::Ui) {
+        ui.label(egui::RichText::new("Hotkeys").strong());
+        ui.horizontal(|ui| {
+            ui.label("Record Toggle:");
+            ui.add(egui::TextEdit::singleline(&mut self.config.hotkey.record_toggle));
+        });
+        ui.horizontal(|ui| {
+            ui.label("Switch Engine: ");
+            ui.add(egui::TextEdit::singleline(&mut self.config.hotkey.engine_switch));
+        });
+        ui.horizontal(|ui| {
+            ui.label("Switch Inject: ");
+            ui.add(egui::TextEdit::singleline(&mut self.config.hotkey.inject_mode_switch));
+        });
+        ui.horizontal(|ui| {
+            ui.label("TTS Trigger:   ");
+            ui.add(egui::TextEdit::singleline(&mut self.config.hotkey.tts_trigger));
+        });
+        ui.add_space(12.0);
+    }
+
+    fn render_asr(&mut self, ui: &mut egui::Ui) {
+        ui.label(egui::RichText::new("ASR Engine").strong());
+        egui::ComboBox::from_label("Primary")
+            .selected_text(&self.config.asr.primary_engine)
+            .show_ui(ui, |ui| {
+                for name in [
+                    "whisper-cpp",
+                    "openai",
+                    "mimo",
+                    "aliyun",
+                    "whisper-local",
+                ] {
+                    ui.selectable_value(
+                        &mut self.config.asr.primary_engine,
+                        name.to_string(),
+                        name,
+                    );
                 }
-            }
-            Err(e) => {
-                log::error!("Failed to serialize config: {}", e);
-            }
-        }
+            });
+        ui.add_space(6.0);
+
+        // whisper.cpp
+        ui.label(egui::RichText::new("whisper.cpp (local HTTP)").strong());
+        ui.horizontal(|ui| {
+            ui.label("Base URL:");
+            ui.add(egui::TextEdit::singleline(&mut self.config.asr.whisper_cpp.base_url));
+        });
+        ui.add_space(6.0);
+
+        // OpenAI-compatible
+        ui.label(egui::RichText::new("OpenAI-compatible").strong());
+        ui.horizontal(|ui| {
+            ui.label("Base URL:");
+            ui.add(egui::TextEdit::singleline(&mut self.config.asr.openai.base_url));
+        });
+        ui.horizontal(|ui| {
+            ui.label("API Key: ");
+            ui.add(
+                egui::TextEdit::singleline(&mut self.config.asr.openai.api_key).password(true),
+            );
+        });
+        ui.horizontal(|ui| {
+            ui.label("Model:   ");
+            ui.add(egui::TextEdit::singleline(&mut self.config.asr.openai.model));
+        });
+        ui.add_space(6.0);
+
+        // Mimo
+        ui.label(egui::RichText::new("Mimo ASR").strong());
+        ui.horizontal(|ui| {
+            ui.label("Base URL:");
+            ui.add(egui::TextEdit::singleline(&mut self.config.asr.mimo.base_url));
+        });
+        ui.horizontal(|ui| {
+            ui.label("API Key: ");
+            ui.add(egui::TextEdit::singleline(&mut self.config.asr.mimo.api_key).password(true));
+        });
+        ui.horizontal(|ui| {
+            ui.label("Model:   ");
+            ui.add(egui::TextEdit::singleline(&mut self.config.asr.mimo.model));
+        });
+        ui.add_space(6.0);
+
+        // Aliyun
+        ui.label(egui::RichText::new("Aliyun ASR").strong());
+        ui.horizontal(|ui| {
+            ui.label("Appkey: ");
+            ui.add(egui::TextEdit::singleline(&mut self.config.asr.aliyun.appkey));
+        });
+        ui.horizontal(|ui| {
+            ui.label("Token:  ");
+            ui.add(egui::TextEdit::singleline(&mut self.config.asr.aliyun.token).password(true));
+        });
+        ui.add_space(12.0);
+    }
+
+    fn render_inject(&mut self, ui: &mut egui::Ui) {
+        ui.label(egui::RichText::new("Inject Mode").strong());
+        egui::ComboBox::from_label("Mode")
+            .selected_text(&self.config.inject.mode)
+            .show_ui(ui, |ui| {
+                ui.selectable_value(
+                    &mut self.config.inject.mode,
+                    "keyboard".to_string(),
+                    "Keyboard",
+                );
+                ui.selectable_value(
+                    &mut self.config.inject.mode,
+                    "clipboard".to_string(),
+                    "Clipboard",
+                );
+            });
+        ui.add_space(12.0);
+    }
+
+    fn render_tts(&mut self, ui: &mut egui::Ui) {
+        ui.label(egui::RichText::new("TTS").strong());
+        egui::ComboBox::from_label("Engine")
+            .selected_text(&self.config.tts.primary_engine)
+            .show_ui(ui, |ui| {
+                ui.selectable_value(
+                    &mut self.config.tts.primary_engine,
+                    "edge-tts".to_string(),
+                    "edge-tts (free)",
+                );
+                ui.selectable_value(
+                    &mut self.config.tts.primary_engine,
+                    "mimo-tts".to_string(),
+                    "mimo-tts",
+                );
+            });
+        egui::ComboBox::from_label("Input")
+            .selected_text(&self.config.tts.input_mode)
+            .show_ui(ui, |ui| {
+                ui.selectable_value(
+                    &mut self.config.tts.input_mode,
+                    "selection".to_string(),
+                    "Selection (Ctrl+C)",
+                );
+                ui.selectable_value(
+                    &mut self.config.tts.input_mode,
+                    "clipboard".to_string(),
+                    "Clipboard",
+                );
+            });
+        ui.add_space(6.0);
+
+        // Edge TTS
+        ui.label(egui::RichText::new("Edge TTS").strong());
+        ui.horizontal(|ui| {
+            ui.label("Voice:");
+            ui.add(egui::TextEdit::singleline(&mut self.config.tts.edge.voice));
+        });
+        ui.horizontal(|ui| {
+            ui.label("Rate:  ");
+            ui.add(egui::TextEdit::singleline(&mut self.config.tts.edge.rate));
+        });
+        ui.horizontal(|ui| {
+            ui.label("Volume:");
+            ui.add(egui::TextEdit::singleline(&mut self.config.tts.edge.volume));
+        });
+        ui.horizontal(|ui| {
+            ui.label("Pitch: ");
+            ui.add(egui::TextEdit::singleline(&mut self.config.tts.edge.pitch));
+        });
+        ui.add_space(12.0);
+    }
+
+    fn render_general(&mut self, ui: &mut egui::Ui) {
+        ui.label(egui::RichText::new("General").strong());
+        ui.checkbox(&mut self.config.general.autostart, "Autostart");
+        ui.add_space(16.0);
     }
 }

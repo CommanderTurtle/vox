@@ -5,6 +5,7 @@
 //! - [`TtsManager`]: manages engine registry and switching.
 
 pub mod mimo_tts;
+pub mod edge_tts;
 pub mod playback;
 
 use async_trait::async_trait;

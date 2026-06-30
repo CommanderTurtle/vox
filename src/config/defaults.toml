@@ -5,12 +5,20 @@ inject_mode_switch = "Alt+Shift+V"
 tts_trigger = "Alt+T"
 
 [asr]
-primary_engine = "mimo"
-fallback_engines = ["whisper-local", "openai"]
+# Local ASR is the default (no cloud key needed). Start the whisper.cpp
+# server (see [asr.whisper_cpp]) or point [asr.openai] at a local
+# OpenAI-compatible server.
+primary_engine = "whisper-cpp"
+fallback_engines = ["openai"]
 
 [asr.whisper_local]
-model = "tiny"
+model = "base"
 model_path = ""
+
+[asr.whisper_cpp]
+# whisper.cpp HTTP server. Start with:
+#   ./server -m ggml-base.en.bin -p 4 --port 8080
+base_url = "http://127.0.0.1:8080"
 
 [asr.mimo]
 base_url = "https://token-plan-cn.xiaomimimo.com/v1"
@@ -22,6 +30,10 @@ appkey = ""
 token = ""
 
 [asr.openai]
+# OpenAI-compatible endpoint. Point base_url at a local server
+# (e.g. faster-whisper-server) to use as local ASR, or keep the cloud URL
+# with an api_key for OpenAI Whisper.
+base_url = "https://api.openai.com/v1"
 api_key = ""
 model = "whisper-1"
 
@@ -29,8 +41,15 @@ model = "whisper-1"
 mode = "keyboard"
 
 [tts]
-primary_engine = "mimo-tts"
+# Free Microsoft Edge TTS — no API key required.
+primary_engine = "edge-tts"
 input_mode = "selection"
+
+[tts.edge]
+voice = "zh-CN-XiaoxiaoNeural"
+rate = "+0%"
+volume = "+0%"
+pitch = "+0Hz"
 
 [tts.mimo]
 model = "mimo-v2.5-tts"
