@@ -1,6 +1,6 @@
 [package]
 name = "vox"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 description = "Global voice input/output booster for CLI AI agents"
 authors = ["Voice Boost Team"]
@@ -67,9 +67,10 @@ rodio = { version = "0.20", default-features = false, features = ["wav", "mp3"] 
 
 # GUI for settings window
 egui = "0.34"
-# eframe needs an explicit winit backend (x11) on Linux, otherwise winit
-# emits "platform not supported" at compile time.
-eframe = { version = "0.34", default-features = false, features = ["default_fonts", "glow", "x11"] }
+# eframe needs explicit winit backends (x11 + wayland) on Linux, otherwise
+# winit emits "platform not supported" at compile time. Both are enabled so
+# the binary works under either session; the active one is chosen at runtime.
+eframe = { version = "0.34", default-features = false, features = ["default_fonts", "glow", "x11", "wayland"] }
 
 # Feature flags
 [features]
