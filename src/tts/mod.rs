@@ -7,8 +7,6 @@
 pub mod mimo_tts;
 pub mod playback;
 
-use std::collections::HashMap;
-
 use async_trait::async_trait;
 
 use crate::config::Config;
@@ -82,31 +80,35 @@ pub trait TtsEngine: Send + Sync {
 }
 
 /// Manages multiple TTS engines.
+///
+/// Engines are stored in a `Vec` to preserve registration order (so the tray
+/// menu lists engines deterministically). The active engine is behind a
+/// `RwLock` so the manager can be shared across threads via `Arc`.
 pub struct TtsManager {
-    engines: HashMap<String, Box<dyn TtsEngine>>,
-    active: String,
+    engines: Vec<(String, Box<dyn TtsEngine>)>,
+    active: std::sync::RwLock<String>,
 }
 
 impl TtsManager {
     pub fn new(primary: String) -> Self {
         Self {
-            engines: HashMap::new(),
-            active: primary,
+            engines: Vec::new(),
+            active: std::sync::RwLock::new(primary),
         }
     }
 
     pub fn register(&mut self, engine: Box<dyn TtsEngine>) {
         let name = engine.name().to_string();
-        self.engines.insert(name, engine);
+        self.engines.push((name, engine));
     }
 
-    pub fn active_engine(&self) -> &str {
-        &self.active
+    pub fn active_engine(&self) -> String {
+        self.active.read().expect("active lock poisoned").clone()
     }
 
-    pub fn set_active(&mut self, name: &str) -> Result<(), TtsError> {
-        if self.engines.contains_key(name) {
-            self.active = name.to_string();
+    pub fn set_active(&self, name: &str) -> Result<(), TtsError> {
+        if self.engines.iter().any(|(n, _)| n == name) {
+            *self.active.write().expect("active lock poisoned") = name.to_string();
             Ok(())
         } else {
             Err(TtsError::EngineNotFound { name: name.to_string() })
@@ -114,24 +116,29 @@ impl TtsManager {
     }
 
     #[allow(dead_code)]
-    pub fn cycle_engine(&mut self) -> Option<&str> {
-        let names: Vec<&String> = self.engines.keys().collect();
-        if names.is_empty() { return None; }
-        let pos = names.iter().position(|n| *n == &self.active);
+    pub fn cycle_engine(&self) -> Option<String> {
+        if self.engines.is_empty() {
+            return None;
+        }
+        let names: Vec<&String> = self.engines.iter().map(|(n, _)| n).collect();
+        let current = self.active.read().expect("active lock poisoned").clone();
+        let pos = names.iter().position(|n| *n == &current);
         let next = match pos {
             Some(i) => (i + 1) % names.len(),
             None => 0,
         };
-        self.active = names[next].clone();
-        Some(self.active.as_str())
+        let name = names[next].clone();
+        *self.active.write().expect("active lock poisoned") = name.clone();
+        Some(name)
     }
 
     pub fn engine_names(&self) -> Vec<String> {
-        self.engines.keys().cloned().collect()
+        self.engines.iter().map(|(n, _)| n.clone()).collect()
     }
 
     pub async fn synthesize(&self, text: &str) -> Result<Vec<u8>, TtsError> {
-        if let Some(engine) = self.engines.get(&self.active) {
+        let active = self.active.read().expect("active lock poisoned").clone();
+        if let Some((_, engine)) = self.engines.iter().find(|(n, _)| *n == active) {
             return engine.synthesize(text).await;
         }
         Err(TtsError::NoEngineAvailable)

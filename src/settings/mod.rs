@@ -12,7 +12,13 @@ use crate::config::Config;
 
 /// Spawn the settings window in a new thread.
 /// Returns immediately; the window runs independently.
-pub fn spawn_settings_window(config_path: &std::path::Path) {
+///
+/// `reload_tx` is notified after the user saves, so the running app can
+/// reload the config and apply changes live (no restart needed).
+pub fn spawn_settings_window(
+    config_path: &std::path::Path,
+    reload_tx: crossbeam::channel::Sender<()>,
+) {
     let path = config_path.to_path_buf();
     let running = Arc::new(AtomicBool::new(true));
     let running_clone = running.clone();
@@ -30,6 +36,7 @@ pub fn spawn_settings_window(config_path: &std::path::Path) {
             path,
             config: config.into(),
             running: running_clone,
+            reload_tx,
         };
 
         if let Err(e) = eframe::run_native(
@@ -61,6 +68,7 @@ struct SettingsApp {
     path: std::path::PathBuf,
     config: Box<Config>,
     running: Arc<AtomicBool>,
+    reload_tx: crossbeam::channel::Sender<()>,
 }
 
 impl eframe::App for SettingsApp {
@@ -164,6 +172,8 @@ impl eframe::App for SettingsApp {
                 ui.horizontal(|ui| {
                     if ui.button("💾 Save && Close").clicked() {
                         self.save_config();
+                        // Notify the running app to reload config from disk.
+                        let _ = self.reload_tx.send(());
                         ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
                     }
                     if ui.button("✕ Cancel").clicked() {

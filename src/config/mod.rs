@@ -198,6 +198,18 @@ impl ConfigManager {
         Ok(())
     }
 
+    /// Reload the config from disk, replacing the in-memory copy.
+    ///
+    /// Used after the settings window writes a new config so the running
+    /// app picks up changes (API keys, engine, modes) without a restart.
+    pub fn reload_from_disk(&self) -> Result<(), Box<dyn std::error::Error>> {
+        let raw = std::fs::read_to_string(&self.path)?;
+        let config: Config = toml::from_str(&raw)?;
+        let mut guard = self.config.write().map_err(|e| e.to_string())?;
+        *guard = config;
+        Ok(())
+    }
+
     /// Read-only access to the config.
     pub fn read(&self) -> std::sync::RwLockReadGuard<'_, Config> {
         self.config.read().expect("config lock poisoned")

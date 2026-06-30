@@ -46,6 +46,30 @@ pub fn duration_seconds(sample_count: usize, sample_rate: u32) -> f64 {
     sample_count as f64 / sample_rate as f64
 }
 
+/// Resample mono i16 PCM from `from_rate` to `to_rate` using linear
+/// interpolation. If the rates are equal the input is returned unchanged.
+///
+/// ASR engines (and whisper.cpp) expect 16 kHz; device capture is often
+/// 44.1/48 kHz, so we resample before encoding to WAV.
+pub fn resample_linear(samples: &[i16], from_rate: u32, to_rate: u32) -> Vec<i16> {
+    if samples.is_empty() || from_rate == to_rate {
+        return samples.to_vec();
+    }
+    let ratio = to_rate as f64 / from_rate as f64;
+    let out_len = ((samples.len() as f64) * ratio).round() as usize;
+    let mut out = Vec::with_capacity(out_len);
+    for i in 0..out_len {
+        let src_pos = i as f64 / ratio;
+        let idx0 = src_pos.floor() as usize;
+        let idx1 = (idx0 + 1).min(samples.len() - 1);
+        let frac = src_pos - idx0 as f64;
+        let s0 = samples[idx0] as f64;
+        let s1 = samples[idx1] as f64;
+        out.push((s0 + (s1 - s0) * frac).round().clamp(-32768.0, 32767.0) as i16);
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -77,5 +101,20 @@ mod tests {
     #[test]
     fn test_duration() {
         assert!((duration_seconds(16000, 16000) - 1.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_resample_identity() {
+        let samples = vec![100i16, 200, 300, 400];
+        let out = resample_linear(&samples, 16000, 16000);
+        assert_eq!(out, samples);
+    }
+
+    #[test]
+    fn test_resample_downsample() {
+        // 48000 -> 16000 should yield a third of the samples
+        let samples: Vec<i16> = (0..48).collect();
+        let out = resample_linear(&samples, 48000, 16000);
+        assert_eq!(out.len(), 16);
     }
 }

@@ -19,7 +19,7 @@ use crossbeam::channel;
 use app::hotkey::{HotkeyBinding, HotkeyEvent, start_hotkey_listener};
 use asr::AsrManager;
 use audio::capture::AudioCapture;
-use audio::utils::pcm_to_wav;
+use audio::utils::{pcm_to_wav, resample_linear};
 use config::ConfigManager;
 use inject::{InjectMode, inject_text};
 use app::state::AppState;
@@ -29,17 +29,31 @@ use tts::TtsInputMode;
 use tts::mimo_tts::MimoTtsEngine;
 use tts::playback::play_wav_async;
 
+/// Result of an async ASR job, posted back to the main loop.
+enum AsrResult {
+    /// Successfully transcribed text, ready to inject.
+    Text(String),
+    /// ASR failed; message is logged and the app returns to idle.
+    Failed(String),
+}
+
 /// Shared application state.
 struct AppCtx {
     config_mgr: ConfigManager,
-    asr_mgr: AsrManager,
-    tts_mgr: TtsManager,
+    asr_mgr: Arc<AsrManager>,
+    tts_mgr: Arc<TtsManager>,
     tts_input_mode: tts::TtsInputMode,
     inject_mode: InjectMode,
     /// Sender for commands to the tray thread.
     tray_cmd_tx: channel::Sender<TrayCommand>,
     /// Current recording capture handle (None when idle).
     capture: Option<AudioCapture>,
+    /// Shared async runtime for ASR/TTS (kept alive for the app lifetime).
+    runtime: tokio::runtime::Runtime,
+    /// Sender for ASR results posted from background tasks.
+    asr_result_tx: channel::Sender<AsrResult>,
+    /// Notified by the settings window after a save, to trigger a live reload.
+    config_reload_tx: channel::Sender<()>,
     /// Path to config file (for settings window).
     config_path: std::path::PathBuf,
 }
@@ -95,7 +109,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     // ── Initialize ASR manager ───────────────────────────────────────────
-    let asr_mgr = build_asr_manager(&config_mgr);
+    let asr_mgr: Arc<AsrManager> = Arc::new(build_asr_manager(&config_mgr));
 
     // ── Initialize TTS manager ───────────────────────────────────────────
     let mut tts_mgr = TtsManager::new("mimo-tts".to_string());
@@ -113,6 +127,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             log::warn!("Mimo TTS engine skipped: no api_key configured");
         }
     }
+    let tts_mgr: Arc<TtsManager> = Arc::new(tts_mgr);
 
     let inject_mode = InjectMode::from_config(&config_mgr.read());
     let tts_input_mode = TtsInputMode::from_config(&config_mgr.read());
@@ -139,6 +154,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     log::info!("vox initialized. Waiting for events...");
 
+    // ── Shared async runtime + ASR result channel ───────────────────────
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?;
+    let (asr_result_tx, asr_result_rx) = channel::unbounded::<AsrResult>();
+
+    // Channel for "settings saved" notifications from the settings window,
+    // so the running app can reload config and apply changes live.
+    let (config_reload_tx, config_reload_rx) = channel::unbounded::<()>();
+
     // ── Application context ──────────────────────────────────────────────
     let mut ctx = AppCtx {
         config_path: config_mgr.path().clone(),
@@ -149,6 +174,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         inject_mode,
         tray_cmd_tx,
         capture: None,
+        runtime,
+        asr_result_tx,
+        config_reload_tx,
     };
 
     // ── Main event loop (NO Windows message pump needed here) ────────────
@@ -167,6 +195,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     handle_hotkey_event(&mut ctx, event);
                 }
             }
+            recv(asr_result_rx) -> msg => {
+                if let Ok(result) = msg {
+                    handle_asr_result(&mut ctx, result);
+                }
+            }
+            recv(config_reload_rx) -> _msg => {
+                handle_config_reload(&mut ctx);
+            }
         }
     }
 
@@ -184,7 +220,7 @@ fn handle_tray_event(ctx: &mut AppCtx, msg: Result<TrayEvent, crossbeam::channel
         Ok(TrayEvent::OpenSettings) => {
             log::info!("Opening settings window...");
             let path = ctx.config_path.clone();
-            settings::spawn_settings_window(&path);
+            settings::spawn_settings_window(&path, ctx.config_reload_tx.clone());
         }
         Ok(TrayEvent::SetEngine(name)) => {
             log::info!("Switching engine to: {}", name);
@@ -269,6 +305,10 @@ fn handle_hotkey_event(ctx: &mut AppCtx, event: HotkeyEvent) {
 }
 
 /// Trigger TTS: read text and speak it.
+///
+/// Text acquisition happens synchronously (it simulates Ctrl+C / reads the
+/// clipboard, which must run on the main thread), but synthesis + playback
+/// are dispatched to the shared runtime so the event loop is not blocked.
 fn trigger_tts(ctx: &mut AppCtx) {
     let mode = ctx.tts_input_mode;
     log::info!("TTS input mode: {:?}", mode);
@@ -311,25 +351,22 @@ fn trigger_tts(ctx: &mut AppCtx) {
 
     log::info!("TTS synthesizing with engine '{}': {} chars", ctx.tts_mgr.active_engine(), text.len());
 
-    let rt = match tokio::runtime::Runtime::new() {
-        Ok(r) => r,
-        Err(e) => {
-            log::error!("Failed to create runtime: {}", e);
-            return;
+    // Synthesize on the shared runtime; play once ready. The event loop is
+    // not blocked — this just spawns a task and returns.
+    let tts_mgr_ref = ctx.tts_mgr.clone();
+    let active = ctx.tts_mgr.active_engine();
+    ctx.runtime.spawn(async move {
+        let result = tts_mgr_ref.synthesize(&text).await;
+        match result {
+            Ok(audio) => {
+                log::info!("TTS synthesized {} bytes of audio", audio.len());
+                play_wav_async(audio);
+            }
+            Err(e) => {
+                log::error!("TTS synthesis (engine '{}') failed: {}", active, e);
+            }
         }
-    };
-
-    let result = rt.block_on(ctx.tts_mgr.synthesize(&text));
-    match result {
-        Ok(audio) => {
-            log::info!("TTS synthesized {} bytes of audio", audio.len());
-            // Play audio asynchronously
-            play_wav_async(audio);
-        }
-        Err(e) => {
-            log::error!("TTS synthesis failed: {}", e);
-        }
-    }
+    });
 }
 
 /// Toggle recording on/off.
@@ -338,23 +375,22 @@ fn toggle_recording(ctx: &mut AppCtx) {
         // Stop recording
         log::info!("Stopping recording...");
         let capture = ctx.capture.take().unwrap();
+        let device_rate = capture.sample_rate();
         let samples = capture.stop();
-        log::info!("Captured {} samples ({:.1}s)", samples.len(), samples.len() as f64 / 16000.0);
+        log::info!(
+            "Captured {} samples at {} Hz ({:.1}s)",
+            samples.len(),
+            device_rate,
+            samples.len() as f64 / device_rate as f64
+        );
 
         update_tray_state(&ctx.tray_cmd_tx, AppState::Transcribing);
 
-        // Create a runtime for the async ASR call
-        let rt = match tokio::runtime::Runtime::new() {
-            Ok(r) => r,
-            Err(e) => {
-                log::error!("Failed to create tokio runtime: {}", e);
-                update_tray_state(&ctx.tray_cmd_tx, AppState::Idle);
-                return;
-            }
-        };
-
-        // 1. Encode PCM to WAV
-        let wav_bytes = match pcm_to_wav(&samples, 16000) {
+        // Resample to 16 kHz (what ASR engines expect) and encode to WAV.
+        // Done in a blocking task so heavy resampling doesn't stall the
+        // runtime's async executor.
+        let samples_16k = resample_linear(&samples, device_rate, 16000);
+        let wav_bytes = match pcm_to_wav(&samples_16k, 16000) {
             Ok(b) => b,
             Err(e) => {
                 log::error!("WAV encoding failed: {}", e);
@@ -363,28 +399,22 @@ fn toggle_recording(ctx: &mut AppCtx) {
             }
         };
 
-        // 2. Run ASR
+        // Run ASR on the shared runtime without blocking the main loop.
         log::info!("Running ASR with engine '{}'...", ctx.asr_mgr.active_engine());
-        let result = rt.block_on(ctx.asr_mgr.transcribe(&wav_bytes));
-        let text = match result {
-            Ok(t) => {
-                log::info!("ASR result: {} chars", t.len());
-                t
+        let asr_ref = ctx.asr_mgr.clone();
+        let asr_result_tx = ctx.asr_result_tx.clone();
+        ctx.runtime.spawn(async move {
+            let result = asr_ref.transcribe(&wav_bytes).await;
+            match result {
+                Ok(text) => {
+                    log::info!("ASR result: {} chars", text.len());
+                    let _ = asr_result_tx.send(AsrResult::Text(text));
+                }
+                Err(e) => {
+                    let _ = asr_result_tx.send(AsrResult::Failed(e.to_string()));
+                }
             }
-            Err(e) => {
-                log::error!("ASR failed: {}", e);
-                update_tray_state(&ctx.tray_cmd_tx, AppState::Idle);
-                return;
-            }
-        };
-
-        // 3. Inject text
-        log::info!("Injecting text ({} chars) via {:?}", text.len(), ctx.inject_mode);
-        if let Err(e) = inject_text(&text, ctx.inject_mode) {
-            log::error!("Text injection failed: {}", e);
-        }
-
-        update_tray_state(&ctx.tray_cmd_tx, AppState::Idle);
+        });
     } else {
         // Start recording
         log::info!("Starting recording...");
@@ -399,6 +429,63 @@ fn toggle_recording(ctx: &mut AppCtx) {
             }
         }
     }
+}
+
+/// Handle an ASR result posted from a background task.
+fn handle_asr_result(ctx: &mut AppCtx, result: AsrResult) {
+    match result {
+        AsrResult::Text(text) => {
+            log::info!("Injecting text ({} chars) via {:?}", text.len(), ctx.inject_mode);
+            if let Err(e) = inject_text(&text, ctx.inject_mode) {
+                log::error!("Text injection failed: {}", e);
+            }
+        }
+        AsrResult::Failed(msg) => {
+            log::error!("ASR failed: {}", msg);
+        }
+    }
+    update_tray_state(&ctx.tray_cmd_tx, AppState::Idle);
+}
+
+/// Reload the config from disk and apply changes live (engines, inject mode,
+/// TTS input mode) without restarting the app.
+///
+/// Note: the tray menu's engine list is built once at startup and is not
+/// rebuilt here — engine name changes in settings take effect on next launch.
+fn handle_config_reload(ctx: &mut AppCtx) {
+    log::info!("Config changed externally — reloading live...");
+
+    if let Err(e) = ctx.config_mgr.reload_from_disk() {
+        log::error!("Failed to reload config: {}", e);
+        return;
+    }
+
+    // Rebuild engine managers from the freshly loaded config.
+    ctx.asr_mgr = Arc::new(build_asr_manager(&ctx.config_mgr));
+
+    // Rebuild TTS manager.
+    let mut tts_mgr = TtsManager::new("mimo-tts".to_string());
+    {
+        let cfg = ctx.config_mgr.read();
+        let mimo_cfg = &cfg.asr.mimo;
+        let tts_cfg = &cfg.tts.mimo;
+        if !mimo_cfg.api_key.is_empty() {
+            let engine = MimoTtsEngine::new(&mimo_cfg.base_url, &mimo_cfg.api_key, &tts_cfg.model);
+            tts_mgr.register(Box::new(engine));
+        }
+    }
+    ctx.tts_mgr = Arc::new(tts_mgr);
+
+    // Refresh runtime modes from the reloaded config.
+    ctx.inject_mode = InjectMode::from_config(&ctx.config_mgr.read());
+    ctx.tts_input_mode = TtsInputMode::from_config(&ctx.config_mgr.read());
+
+    log::info!(
+        "Live reload complete | engine={} | inject={:?} | tts_input={:?}",
+        ctx.asr_mgr.active_engine(),
+        ctx.inject_mode,
+        ctx.tts_input_mode,
+    );
 }
 
 // ── CLI debug subcommands ─────────────────────────────────────────────
@@ -467,10 +554,19 @@ fn build_asr_manager(config_mgr: &ConfigManager) -> AsrManager {
 
     let mut asr_mgr = AsrManager::new(primary_engine, fallback_engines);
 
-    if let Ok(engine) = WhisperLocalEngine::new("") {
-        asr_mgr.register(Box::new(engine));
-    } else {
-        log::warn!("whisper-local engine not available");
+    // Whisper local engine — only registers when a model path is configured
+    // AND the `whisper-local` feature was enabled at compile time.
+    {
+        let cfg = config_mgr.read();
+        let wl_cfg = &cfg.asr.whisper_local;
+        if !wl_cfg.model_path.is_empty() {
+            match WhisperLocalEngine::new(&wl_cfg.model_path) {
+                Ok(engine) => asr_mgr.register(Box::new(engine)),
+                Err(e) => log::warn!("whisper-local engine not available: {}", e),
+            }
+        } else {
+            log::info!("whisper-local engine skipped: no model_path configured");
+        }
     }
 
     {

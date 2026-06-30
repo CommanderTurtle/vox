@@ -10,8 +10,6 @@ pub mod mimo_asr;
 pub mod openai_asr;
 pub mod aliyun_asr;
 
-use std::collections::HashMap;
-
 use async_trait::async_trait;
 
 /// Errors from ASR recognition.
@@ -42,9 +40,14 @@ pub trait AsrEngine: Send + Sync {
 }
 
 /// Manages multiple ASR engines with automatic fallback.
+///
+/// Engines are stored in a `Vec` to preserve registration order (so cycling
+/// and tray-menu listing are deterministic, unlike a `HashMap`). The active
+/// engine is behind a `RwLock` so the manager can be shared across threads
+/// via `Arc` while still allowing the active engine to be switched.
 pub struct AsrManager {
-    engines: HashMap<String, Box<dyn AsrEngine>>,
-    active: String,
+    engines: Vec<(String, Box<dyn AsrEngine>)>,
+    active: std::sync::RwLock<String>,
     fallback_order: Vec<String>,
 }
 
@@ -52,8 +55,8 @@ impl AsrManager {
     /// Create a new manager with no engines registered.
     pub fn new(primary: String, fallback: Vec<String>) -> Self {
         Self {
-            engines: HashMap::new(),
-            active: primary,
+            engines: Vec::new(),
+            active: std::sync::RwLock::new(primary),
             fallback_order: fallback,
         }
     }
@@ -61,62 +64,66 @@ impl AsrManager {
     /// Register an engine.
     pub fn register(&mut self, engine: Box<dyn AsrEngine>) {
         let name = engine.name().to_string();
-        self.engines.insert(name, engine);
+        self.engines.push((name, engine));
     }
 
     /// Get the name of the currently active engine.
-    pub fn active_engine(&self) -> &str {
-        &self.active
+    pub fn active_engine(&self) -> String {
+        self.active.read().expect("active lock poisoned").clone()
     }
 
     /// Switch the active engine by name.
-    pub fn set_active(&mut self, name: &str) -> Result<(), AsrError> {
-        if self.engines.contains_key(name) {
-            self.active = name.to_string();
+    pub fn set_active(&self, name: &str) -> Result<(), AsrError> {
+        if self.engines.iter().any(|(n, _)| n == name) {
+            *self.active.write().expect("active lock poisoned") = name.to_string();
             Ok(())
         } else {
             Err(AsrError::EngineNotFound { name: name.to_string() })
         }
     }
 
-    /// Cycle to the next available engine.
-    pub fn cycle_engine(&mut self) -> Option<&str> {
-        let names: Vec<&String> = self.engines.keys().collect();
-        if names.is_empty() {
+    /// Cycle to the next available engine. Returns the new active name.
+    pub fn cycle_engine(&self) -> Option<String> {
+        if self.engines.is_empty() {
             return None;
         }
-        let pos = names.iter().position(|n| *n == &self.active);
+        let names: Vec<&String> = self.engines.iter().map(|(n, _)| n).collect();
+        let current = self.active.read().expect("active lock poisoned").clone();
+        let pos = names.iter().position(|n| *n == &current);
         let next_idx = match pos {
             Some(i) => (i + 1) % names.len(),
             None => 0,
         };
-        self.active = names[next_idx].clone();
-        Some(self.active.as_str())
+        let next = names[next_idx].clone();
+        *self.active.write().expect("active lock poisoned") = next.clone();
+        Some(next)
     }
 
-    /// Get the list of registered engine names.
+    /// Get the list of registered engine names (in registration order).
     pub fn engine_names(&self) -> Vec<String> {
-        self.engines.keys().cloned().collect()
+        self.engines.iter().map(|(n, _)| n.clone()).collect()
     }
 
     /// Transcribe audio using the active engine, with automatic fallback.
     pub async fn transcribe(&self, audio_wav: &[u8]) -> Result<String, AsrError> {
+        let active = self.active.read().expect("active lock poisoned").clone();
+
         // Try active engine first
-        if let Some(engine) = self.engines.get(&self.active) {
+        if let Some((_, engine)) = self.engines.iter().find(|(n, _)| *n == active) {
             match engine.transcribe(audio_wav).await {
                 Ok(text) => return Ok(text),
                 Err(e) => {
-                    log::warn!("Active engine '{}' failed: {}", self.active, e);
+                    log::warn!("Active engine '{}' failed: {}", active, e);
                 }
             }
         }
 
         // Try fallbacks in order
         for name in &self.fallback_order {
-            if *name == self.active {
+            if *name == active {
                 continue; // already tried
             }
-            if let Some(engine) = self.engines.get(name) {
+            if let Some((_, engine)) = self.engines.iter().find(|(n, _)| n == name) {
                 match engine.transcribe(audio_wav).await {
                     Ok(text) => {
                         log::info!("Fallback engine '{}' succeeded", name);
@@ -188,15 +195,21 @@ mod tests {
 
     #[test]
     fn test_cycle_engine() {
-        let mut mgr = AsrManager::new("a".into(), vec![]);
-        mgr.register(Box::new(MockEngine)); // name is "mock", not "a"
-
-        // Actually register with proper names
-        drop(mgr);
         let mut mgr = AsrManager::new("mock".into(), vec![]);
         mgr.register(Box::new(MockEngine));
         assert_eq!(mgr.active_engine(), "mock");
         mgr.cycle_engine();
         assert_eq!(mgr.active_engine(), "mock"); // only one engine
+    }
+
+    #[test]
+    fn test_engine_order_preserved() {
+        // Registration order should be reflected in engine_names() and cycling.
+        let mut mgr = AsrManager::new("mock".into(), vec![]);
+        mgr.register(Box::new(MockEngine)); // "mock"
+        mgr.register(Box::new(FailingEngine)); // "failing"
+        assert_eq!(mgr.engine_names(), vec!["mock".to_string(), "failing".to_string()]);
+        assert_eq!(mgr.cycle_engine(), Some("failing".to_string()));
+        assert_eq!(mgr.cycle_engine(), Some("mock".to_string()));
     }
 }

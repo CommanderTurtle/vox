@@ -1,6 +1,6 @@
 //! Read text from the current selection or clipboard.
 //!
-//! Uses the universal approach: save clipboard → simulate Ctrl+C →
+//! Uses the universal approach: snapshot clipboard → simulate Ctrl+C →
 //! read clipboard → restore.
 //!
 //! This works in any application that supports Ctrl+C for copying.
@@ -11,26 +11,30 @@ use std::time::Duration;
 use arboard::Clipboard;
 use enigo::{Enigo, Key, Keyboard, Direction, Settings};
 
-use crate::inject::InjectError;
+use crate::inject::{ClipboardSnapshot, InjectError};
 
 /// Read selected text by simulating Ctrl+C and reading the clipboard.
 /// Retries a few times if clipboard is empty (timing issue).
 /// Returns the text, or an empty string if nothing was selected.
+///
+/// The previous clipboard contents (text *or* image) are snapshotted first
+/// and restored afterwards, so the user's clipboard is not destroyed.
 pub fn read_selected_text() -> Result<String, InjectError> {
     let mut enigo = Enigo::new(&Settings::default()).map_err(|e| {
         InjectError::Keyboard(format!("Failed to create Enigo: {:?}", e))
     })?;
 
-    // Save current clipboard content
-    let mut cb = Clipboard::new().map_err(|e| {
-        InjectError::Clipboard(format!("Failed to open clipboard: {}", e))
-    })?;
-    let saved = cb.get_text().ok();
+    // Snapshot whatever is on the clipboard (text or image) so we can restore
+    // it afterwards — this avoids destroying non-text clipboard contents.
+    let snapshot = ClipboardSnapshot::capture()?;
 
-    // Clear clipboard first so we can detect if something was actually copied
-    cb.clear().ok();
-    drop(cb); // close clipboard handle so other apps can write to it
-
+    // Clear clipboard first so we can detect if something was actually copied.
+    {
+        let mut cb = Clipboard::new().map_err(|e| {
+            InjectError::Clipboard(format!("Failed to open clipboard: {}", e))
+        })?;
+        cb.clear().ok();
+    }
     thread::sleep(Duration::from_millis(80));
 
     // Simulate Ctrl+C (or Cmd+C on macOS)
@@ -47,8 +51,7 @@ pub fn read_selected_text() -> Result<String, InjectError> {
     let mut selected = String::new();
     for i in 0..10 {
         thread::sleep(Duration::from_millis(100 + i * 30));
-        let mut cb2 = Clipboard::new().ok();
-        if let Some(ref mut cb) = cb2 {
+        if let Ok(mut cb) = Clipboard::new() {
             let text = cb.get_text().ok().unwrap_or_default();
             if !text.is_empty() {
                 selected = text;
@@ -57,13 +60,9 @@ pub fn read_selected_text() -> Result<String, InjectError> {
         }
     }
 
-    // Restore saved clipboard
-    if let Some(ref saved_text) = saved {
-        thread::sleep(Duration::from_millis(50));
-        if let Ok(mut cb) = Clipboard::new() {
-            let _ = cb.set_text(saved_text);
-        }
-    }
+    // Restore the original clipboard contents (text or image).
+    thread::sleep(Duration::from_millis(50));
+    snapshot.restore();
 
     Ok(selected)
 }

@@ -14,7 +14,7 @@ model_path = ""
 
 [asr.mimo]
 base_url = "https://token-plan-cn.xiaomimimo.com/v1"
-api_key = "tp-cyfh35ww453t75qy9rqdmvmcldq0k0egefj0lnbuz5eax6v3"
+api_key = ""
 model = "mimo-v2.5-asr"
 
 [asr.aliyun]

@@ -106,6 +106,12 @@ pub fn start_hotkey_listener(
     std::thread::spawn(move || {
         let mut pressed: HashSet<Key> = HashSet::new();
         let mut record_was_pressed = false;
+        // Per-action debounce flags: each action only fires once per physical
+        // press, suppressing the OS key-repeat that would otherwise retrigger
+        // the action for as long as the keys are held down.
+        let mut engine_was_pressed = false;
+        let mut inject_was_pressed = false;
+        let mut tts_was_pressed = false;
 
         // rdev's listen() blocks forever; it processes events in callback.
         if let Err(e) = listen(move |event| {
@@ -123,18 +129,21 @@ pub fn start_hotkey_listener(
                         let _ = sender.send(HotkeyEvent::RecordTogglePressed);
                     }
 
-                    // Engine switch (trigger on press)
-                    if engine_switch_binding.matches(&pressed, &key) {
+                    // Engine switch (trigger once per press)
+                    if engine_switch_binding.matches(&pressed, &key) && !engine_was_pressed {
+                        engine_was_pressed = true;
                         let _ = sender.send(HotkeyEvent::EngineSwitch);
                     }
 
-                    // Inject mode switch (trigger on press)
-                    if inject_switch_binding.matches(&pressed, &key) {
+                    // Inject mode switch (trigger once per press)
+                    if inject_switch_binding.matches(&pressed, &key) && !inject_was_pressed {
+                        inject_was_pressed = true;
                         let _ = sender.send(HotkeyEvent::InjectModeSwitch);
                     }
 
-                    // TTS trigger (trigger on press)
-                    if tts_binding.matches(&pressed, &key) {
+                    // TTS trigger (trigger once per press)
+                    if tts_binding.matches(&pressed, &key) && !tts_was_pressed {
+                        tts_was_pressed = true;
                         let _ = sender.send(HotkeyEvent::TtsTrigger);
                     }
                 }
@@ -147,6 +156,17 @@ pub fn start_hotkey_listener(
                             record_was_pressed = false;
                             let _ = sender.send(HotkeyEvent::RecordToggleReleased);
                         }
+                    }
+
+                    // Reset debounce flags when the action's main key is released
+                    if key == engine_switch_binding.key {
+                        engine_was_pressed = false;
+                    }
+                    if key == inject_switch_binding.key {
+                        inject_was_pressed = false;
+                    }
+                    if key == tts_binding.key {
+                        tts_was_pressed = false;
                     }
                 }
                 _ => {}
