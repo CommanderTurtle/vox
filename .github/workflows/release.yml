@@ -1,0 +1,108 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build (${{ matrix.os }} / ${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            archive: zip
+            artifact: vox-windows-x86_64
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            archive: tar.gz
+            artifact: vox-macos-aarch64
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            archive: tar.gz
+            artifact: vox-macos-x86_64
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            archive: tar.gz
+            artifact: vox-linux-x86_64
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install Linux system deps
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgtk-3-dev libxtst-dev libxdo-dev libasound2-dev libssl-dev \
+            libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev
+
+      - name: Build
+        uses: actions-rs/cargo@v1
+        with:
+          command: build
+          args: --release --target ${{ matrix.target }}
+        env:
+          # Strip symbols + optimize for size on release
+          CARGO_PROFILE_RELEASE_LTO: "true"
+          CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "1"
+
+      - name: Stage binary
+        shell: bash
+        run: |
+          mkdir -p staging
+          cp target/${{ matrix.target }}/release/vox${{ matrix.os == 'windows-latest' && '.exe' || '' }} staging/
+          # Include README + config defaults alongside the binary
+          cp README.md staging/ || true
+          mkdir -p staging/config-example
+          cp src/config/defaults.toml staging/config-example/config.toml || true
+
+      - name: Archive (zip, Windows)
+        if: matrix.archive == 'zip'
+        run: 7z a ${{ matrix.artifact }}.zip ./staging/*
+
+      - name: Archive (tar.gz, Unix)
+        if: matrix.archive == 'tar.gz'
+        run: tar czf ${{ matrix.artifact }}.tar.gz -C staging .
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.artifact }}.${{ matrix.archive }}
+
+  release:
+    name: Publish release
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: List artifacts
+        run: ls -la artifacts
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: artifacts/*

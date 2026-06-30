@@ -181,21 +181,48 @@ impl SettingsApp {
     }
 
     fn render_inject(&mut self, ui: &mut egui::Ui) {
-        ui.label(egui::RichText::new("Inject Mode").strong());
-        egui::ComboBox::from_label("Mode")
-            .selected_text(&self.config.inject.mode)
-            .show_ui(ui, |ui| {
-                ui.selectable_value(
-                    &mut self.config.inject.mode,
-                    "keyboard".to_string(),
-                    "Keyboard",
-                );
-                ui.selectable_value(
-                    &mut self.config.inject.mode,
-                    "clipboard".to_string(),
-                    "Clipboard",
-                );
-            });
+        ui.label(egui::RichText::new("Input").strong());
+
+        ui.horizontal(|ui| {
+            ui.label("Inject Mode:");
+            egui::ComboBox::from_id_salt("inject_mode")
+                .selected_text(&self.config.inject.mode)
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(
+                        &mut self.config.inject.mode,
+                        "keyboard".to_string(),
+                        "Keyboard",
+                    );
+                    ui.selectable_value(
+                        &mut self.config.inject.mode,
+                        "clipboard".to_string(),
+                        "Clipboard",
+                    );
+                });
+        });
+
+        ui.horizontal(|ui| {
+            ui.label("Record Mode:");
+            let label = match self.config.general.record_mode.as_str() {
+                "toggle" => "Toggle (press)",
+                _ => "Push-to-Talk (hold)",
+            };
+            egui::ComboBox::from_id_salt("record_mode")
+                .selected_text(label)
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(
+                        &mut self.config.general.record_mode,
+                        "ptt".to_string(),
+                        "Push-to-Talk (hold Alt+`)",
+                    );
+                    ui.selectable_value(
+                        &mut self.config.general.record_mode,
+                        "toggle".to_string(),
+                        "Toggle (press Alt+`)",
+                    );
+                });
+        });
+
         ui.add_space(12.0);
     }
 

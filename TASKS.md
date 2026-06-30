@@ -137,3 +137,17 @@ vox tts "..."        ✅ Edge TTS 合成 MP3 + rodio 播放通过
 - rustls ring provider 启动时安装
 
 **验收:** ✅ `vox transcribe` 走 whisper.cpp 返回识别文本；`vox tts` 合成 MP3 并播放；clippy 零警告
+
+---
+
+## Task 13: Push-to-Talk 录音模式 + 菜单切换 + 多平台打包
+
+**涉及文件:** `src/app/state.rs`, `src/config/mod.rs`, `src/config/defaults.toml`, `src/main.rs`, `src/tray/mod.rs`, `src/settings/mod.rs`, `.github/workflows/release.yml` (新), `scripts/package.sh`, 文档
+
+- `RecordMode` 枚举 (PushToTalk/Toggle) + `from_str`/`as_str`/`display_name`
+- config `general.record_mode` (默认 `ptt`，`#[serde(default)]` 兼容)
+- `toggle_recording` 拆分为 `start_recording`/`stop_recording`；PTT 模式按下开始、松手停止
+- 托盘菜单加 `Record Mode` 子菜单 (CheckMenuItem)；设置窗口加下拉；实时生效
+- `package.sh` 重写（跨平台 zip/tar.gz）；`.github/workflows/release.yml` 三平台构建 + Release
+
+**验收:** 待测试通过后打包上传

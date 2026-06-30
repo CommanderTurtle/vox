@@ -63,10 +63,19 @@ bash scripts/package.sh
 
 | 功能 | 默认快捷键 |
 |------|-----------|
-| 开始/停止录音 | <kbd>Alt</kbd>+<kbd>`</kbd> |
+| 录音（按住/切换） | <kbd>Alt</kbd>+<kbd>`</kbd> |
 | 切换注入模式 | <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>V</kbd> |
 | 切换 ASR 引擎 | <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>E</kbd> |
 | TTS 触发 | <kbd>Alt</kbd>+<kbd>T</kbd> |
+
+### 录音模式（Record Mode，可热切换）
+
+| 模式 | 行为 |
+|------|------|
+| **Push-to-Talk** (`ptt`，默认) | 按住 `Alt+`` 录音，松手停止并识别 |
+| **Toggle** (`toggle`) | 按一下 `Alt+`` 开始，再按一下停止并识别 |
+
+可在托盘菜单 `Record Mode` 或设置窗口切换，实时生效。
 
 ---
 

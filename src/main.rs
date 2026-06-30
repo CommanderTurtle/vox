@@ -22,7 +22,7 @@ use audio::capture::AudioCapture;
 use audio::utils::{pcm_to_wav, resample_linear};
 use config::ConfigManager;
 use inject::{InjectMode, inject_text};
-use app::state::AppState;
+use app::state::{AppState, RecordMode};
 use tray::{TrayEvent, TrayCommand, MenuModel, spawn_tray, refresh_menu};
 use tts::TtsManager;
 use tts::TtsInputMode;
@@ -43,6 +43,8 @@ struct AppCtx {
     tts_mgr: Arc<TtsManager>,
     tts_input_mode: tts::TtsInputMode,
     inject_mode: InjectMode,
+    /// How the record hotkey behaves (push-to-talk vs toggle).
+    record_mode: RecordMode,
     /// Sender for commands to the tray thread.
     tray_cmd_tx: channel::Sender<TrayCommand>,
     /// Current recording capture handle (None when idle).
@@ -121,6 +123,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let inject_mode = InjectMode::from_config(&config_mgr.read());
     let tts_input_mode = TtsInputMode::from_config(&config_mgr.read());
+    let record_mode = RecordMode::from_str(&config_mgr.read().general.record_mode);
 
     // ── Build system tray (dedicated thread with message pump) ───────────
     let (tray_event_sender, tray_event_receiver) = channel::unbounded::<TrayEvent>();
@@ -132,6 +135,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         tts_engines: tts_mgr.engine_names(),
         tts_active: tts_mgr.active_engine(),
         tts_input_mode: tts_input_mode.as_str().to_string(),
+        record_mode: record_mode.as_str().to_string(),
         app_state: AppState::Idle,
     };
     let (tray_cmd_tx, _tray_handle) = spawn_tray(initial_model, tray_event_sender.clone());
@@ -168,6 +172,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         tts_mgr,
         tts_input_mode,
         inject_mode,
+        record_mode,
         tray_cmd_tx,
         capture: None,
         runtime,
@@ -217,6 +222,7 @@ fn build_menu_model(ctx: &AppCtx, app_state: AppState) -> MenuModel {
         tts_engines: ctx.tts_mgr.engine_names(),
         tts_active: ctx.tts_mgr.active_engine(),
         tts_input_mode: ctx.tts_input_mode.as_str().to_string(),
+        record_mode: ctx.record_mode.as_str().to_string(),
         app_state,
     }
 }
@@ -284,6 +290,15 @@ fn handle_tray_event(ctx: &mut AppCtx, msg: Result<TrayEvent, crossbeam::channel
             let _ = ctx.config_mgr.save();
             push_tray(ctx, AppState::Idle);
         }
+        Ok(TrayEvent::SetRecordMode(mode)) => {
+            log::info!("Switching record mode to: {}", mode);
+            ctx.record_mode = RecordMode::from_str(&mode);
+            let mut cfg = ctx.config_mgr.write();
+            cfg.general.record_mode = mode;
+            drop(cfg);
+            let _ = ctx.config_mgr.save();
+            push_tray(ctx, AppState::Idle);
+        }
         Ok(TrayEvent::ToggleRecording) => {
             toggle_recording(ctx);
         }
@@ -297,9 +312,20 @@ fn handle_hotkey_event(ctx: &mut AppCtx, event: HotkeyEvent) {
     match event {
         HotkeyEvent::RecordTogglePressed => {
             log::info!("[Hotkey] Record toggle pressed");
-            toggle_recording(ctx);
+            match ctx.record_mode {
+                // Push-to-talk: press starts recording (only if idle).
+                RecordMode::PushToTalk => start_recording(ctx),
+                // Toggle: press flips start/stop.
+                RecordMode::Toggle => toggle_recording(ctx),
+            }
         }
-        HotkeyEvent::RecordToggleReleased => {}
+        HotkeyEvent::RecordToggleReleased => {
+            // Push-to-talk: release stops recording (only if recording).
+            if ctx.record_mode == RecordMode::PushToTalk {
+                log::info!("[Hotkey] Record toggle released (PTT stop)");
+                stop_recording(ctx);
+            }
+        }
         HotkeyEvent::EngineSwitch => {
             if let Some(name) = ctx.asr_mgr.cycle_engine() {
                 log::info!("[Hotkey] Switched engine to: {}", name);
@@ -392,66 +418,82 @@ fn trigger_tts(ctx: &mut AppCtx) {
     });
 }
 
-/// Toggle recording on/off.
+/// Flip recording state (used by Toggle mode and the tray button).
 fn toggle_recording(ctx: &mut AppCtx) {
     if ctx.capture.is_some() {
-        // Stop recording
-        log::info!("Stopping recording...");
-        let capture = ctx.capture.take().unwrap();
-        let device_rate = capture.sample_rate();
-        let samples = capture.stop();
-        log::info!(
-            "Captured {} samples at {} Hz ({:.1}s)",
-            samples.len(),
-            device_rate,
-            samples.len() as f64 / device_rate as f64
-        );
-
-        push_tray(ctx, AppState::Transcribing);
-
-        // Resample to 16 kHz (what ASR engines expect) and encode to WAV.
-        // Done in a blocking task so heavy resampling doesn't stall the
-        // runtime's async executor.
-        let samples_16k = resample_linear(&samples, device_rate, 16000);
-        let wav_bytes = match pcm_to_wav(&samples_16k, 16000) {
-            Ok(b) => b,
-            Err(e) => {
-                log::error!("WAV encoding failed: {}", e);
-                push_tray(ctx, AppState::Idle);
-                return;
-            }
-        };
-
-        // Run ASR on the shared runtime without blocking the main loop.
-        log::info!("Running ASR with engine '{}'...", ctx.asr_mgr.active_engine());
-        let asr_ref = ctx.asr_mgr.clone();
-        let asr_result_tx = ctx.asr_result_tx.clone();
-        ctx.runtime.spawn(async move {
-            let result = asr_ref.transcribe(&wav_bytes).await;
-            match result {
-                Ok(text) => {
-                    log::info!("ASR result: {} chars", text.len());
-                    let _ = asr_result_tx.send(AsrResult::Text(text));
-                }
-                Err(e) => {
-                    let _ = asr_result_tx.send(AsrResult::Failed(e.to_string()));
-                }
-            }
-        });
+        stop_recording(ctx);
     } else {
-        // Start recording
-        log::info!("Starting recording...");
-        match AudioCapture::start() {
-            Ok(capture) => {
-                push_tray(ctx, AppState::Recording);
-                ctx.capture = Some(capture);
-                log::info!("Recording started.");
-            }
-            Err(e) => {
-                log::error!("Failed to start recording: {}", e);
-            }
+        start_recording(ctx);
+    }
+}
+
+/// Start recording from the microphone.
+fn start_recording(ctx: &mut AppCtx) {
+    if ctx.capture.is_some() {
+        log::warn!("start_recording called while already recording; ignoring");
+        return;
+    }
+    log::info!("Starting recording...");
+    match AudioCapture::start() {
+        Ok(capture) => {
+            push_tray(ctx, AppState::Recording);
+            ctx.capture = Some(capture);
+            log::info!("Recording started.");
+        }
+        Err(e) => {
+            log::error!("Failed to start recording: {}", e);
         }
     }
+}
+
+/// Stop recording, resample + encode to WAV, and kick off ASR.
+fn stop_recording(ctx: &mut AppCtx) {
+    let capture = match ctx.capture.take() {
+        Some(c) => c,
+        None => {
+            log::warn!("stop_recording called while not recording; ignoring");
+            return;
+        }
+    };
+    log::info!("Stopping recording...");
+    let device_rate = capture.sample_rate();
+    let samples = capture.stop();
+    log::info!(
+        "Captured {} samples at {} Hz ({:.1}s)",
+        samples.len(),
+        device_rate,
+        samples.len() as f64 / device_rate as f64
+    );
+
+    push_tray(ctx, AppState::Transcribing);
+
+    // Resample to 16 kHz (what ASR engines expect) and encode to WAV.
+    let samples_16k = resample_linear(&samples, device_rate, 16000);
+    let wav_bytes = match pcm_to_wav(&samples_16k, 16000) {
+        Ok(b) => b,
+        Err(e) => {
+            log::error!("WAV encoding failed: {}", e);
+            push_tray(ctx, AppState::Idle);
+            return;
+        }
+    };
+
+    // Run ASR on the shared runtime without blocking the main loop.
+    log::info!("Running ASR with engine '{}'...", ctx.asr_mgr.active_engine());
+    let asr_ref = ctx.asr_mgr.clone();
+    let asr_result_tx = ctx.asr_result_tx.clone();
+    ctx.runtime.spawn(async move {
+        let result = asr_ref.transcribe(&wav_bytes).await;
+        match result {
+            Ok(text) => {
+                log::info!("ASR result: {} chars", text.len());
+                let _ = asr_result_tx.send(AsrResult::Text(text));
+            }
+            Err(e) => {
+                let _ = asr_result_tx.send(AsrResult::Failed(e.to_string()));
+            }
+        }
+    });
 }
 
 /// Handle an ASR result posted from a background task.
@@ -487,6 +529,7 @@ fn apply_settings(ctx: &mut AppCtx, new_cfg: config::Config) {
     ctx.tts_mgr = Arc::new(build_tts_manager(&ctx.config_mgr));
     ctx.inject_mode = InjectMode::from_config(&ctx.config_mgr.read());
     ctx.tts_input_mode = TtsInputMode::from_config(&ctx.config_mgr.read());
+    ctx.record_mode = RecordMode::from_str(&ctx.config_mgr.read().general.record_mode);
 
     push_tray(ctx, AppState::Idle);
     log::info!(

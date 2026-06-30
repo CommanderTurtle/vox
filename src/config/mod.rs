@@ -213,6 +213,14 @@ pub struct InjectConfig {
 pub struct GeneralConfig {
     pub autostart: bool,
     pub language: String,
+    /// Voice input mode: `"ptt"` (push-to-talk: hold to record, release to
+    /// stop) or `"toggle"` (press to start, press again to stop).
+    #[serde(default = "default_record_mode")]
+    pub record_mode: String,
+}
+
+fn default_record_mode() -> String {
+    "ptt".to_string()
 }
 
 impl Default for Config {

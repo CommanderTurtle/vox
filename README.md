@@ -91,12 +91,17 @@ cargo run --release
 
 ## Keybindings
 
-| Action | Default | Description |
-|--------|---------|-------------|
-| Toggle recording | <kbd>Alt</kbd>+<kbd>`</kbd> | Start / stop microphone input |
-| Switch ASR engine | <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>E</kbd> | Cycle through available engines |
-| Switch inject mode | <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>V</kbd> | Toggle keyboard / clipboard injection |
-| TTS trigger | <kbd>Alt</kbd>+<kbd>T</kbd> | Read selected text (or clipboard) aloud |
+| Action             | Default                                      | Description                                          |
+| ------------------ | -------------------------------------------- | ---------------------------------------------------- |
+| Record             | <kbd>Alt</kbd>+<kbd>`</kbd>                  | Hold to record (push-to-talk) or press to toggle     |
+| Switch ASR engine  | <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>E</kbd> | Cycle through available engines                      |
+| Switch inject mode | <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>V</kbd> | Toggle keyboard / clipboard injection                |
+| TTS trigger        | <kbd>Alt</kbd>+<kbd>T</kbd>                  | Read selected text (or clipboard) aloud              |
+
+The record hotkey behavior depends on the **Record Mode** (settable in the
+tray menu or Settings):
+- **Push-to-Talk** (default): hold `Alt+`` to record, release to stop & transcribe
+- **Toggle**: press `Alt+`` to start, press again to stop & transcribe
 
 All keybindings are configurable in `config.toml`.
 
@@ -107,6 +112,7 @@ All keybindings are configurable in `config.toml`.
 ```
 ASR Engine   ▸  whisper-cpp / openai / mimo / aliyun / whisper-local   (✓ active)
 Inject Mode  ▸  Keyboard / Clipboard                                    (✓ active)
+Record Mode  ▸  Push-to-Talk (hold) / Toggle (press)                    (✓ active)
 ─────────────
 TTS Engine   ▸  edge-tts / mimo-tts                                      (✓ active)
 TTS Input    ▸  Selection (Ctrl+C) / Clipboard                           (✓ active)
@@ -126,11 +132,11 @@ needed when you switch engines or modes.
 
 Configuration file location:
 
-| Platform | Path |
-|----------|------|
-| Windows | `%APPDATA%\vox\vox\config\config.toml` |
-| macOS | `~/Library/Application Support/com.vox/vox/config.toml` |
-| Linux | `~/.config/vox/config.toml` |
+| Platform | Path                                                      |
+| -------- | --------------------------------------------------------- |
+| Windows  | `%APPDATA%\vox\vox\config\config.toml`                  |
+| macOS    | `~/Library/Application Support/com.vox/vox/config.toml` |
+| Linux    | `~/.config/vox/config.toml`                             |
 
 ```toml
 [hotkey]
@@ -181,20 +187,20 @@ speed = 1.0
 
 ### ASR
 
-| Engine | Type | Status |
-|--------|------|--------|
-| **whisper.cpp** (`whisper-cpp`) | Local (HTTP server) | ✅ Default — no key, no FFI |
-| **OpenAI-compatible** (`openai`) | Cloud / Local (REST, multipart) | ✅ `base_url` configurable for localhost |
-| **Mimo ASR** (`mimo`) | Cloud (multimodal chat) | ✅ Needs API key |
-| **Aliyun ASR** (`aliyun`) | Cloud (一句话识别) | ✅ Needs appkey + token |
-| **Whisper Local** (`whisper-local`) | Local (whisper-rs FFI) | ⚠️ Requires `--features whisper-local` + libclang |
+| Engine                                      | Type                            | Status                                               |
+| ------------------------------------------- | ------------------------------- | ---------------------------------------------------- |
+| **whisper.cpp** (`whisper-cpp`)     | Local (HTTP server)             | ✅ Default — no key, no FFI                         |
+| **OpenAI-compatible** (`openai`)    | Cloud / Local (REST, multipart) | ✅`base_url` configurable for localhost            |
+| **Mimo ASR** (`mimo`)               | Cloud (multimodal chat)         | ✅ Needs API key                                     |
+| **Aliyun ASR** (`aliyun`)           | Cloud (一句话识别)              | ✅ Needs appkey + token                              |
+| **Whisper Local** (`whisper-local`) | Local (whisper-rs FFI)          | ⚠️ Requires`--features whisper-local` + libclang |
 
 ### TTS
 
-| Engine | Type | Status |
-|--------|------|--------|
+| Engine                            | Type                 | Status                                  |
+| --------------------------------- | -------------------- | --------------------------------------- |
 | **Edge TTS** (`edge-tts`) | Cloud (free, no key) | ✅ Default — Microsoft Edge Read Aloud |
-| **Mimo TTS** (`mimo-tts`) | Cloud (neural TTS) | ✅ Needs API key |
+| **Mimo TTS** (`mimo-tts`) | Cloud (neural TTS)   | ✅ Needs API key                        |
 
 ---
 
@@ -330,12 +336,16 @@ cargo run --release
 
 ## 快捷键
 
-| 操作 | 默认按键 | 说明 |
-|------|---------|------|
-| 启停录音 | <kbd>Alt</kbd>+<kbd>`</kbd> | 开始 / 停止麦克风输入 |
-| 切换 ASR 引擎 | <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>E</kbd> | 循环切换可用引擎 |
-| 切换注入模式 | <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>V</kbd> | 键盘模拟 / 剪贴板粘贴 |
-| TTS 触发 | <kbd>Alt</kbd>+<kbd>T</kbd> | 朗读选中文字（或剪贴板内容） |
+| 操作          | 默认按键                                     | 说明                                      |
+| ------------- | -------------------------------------------- | ----------------------------------------- |
+| 录音          | <kbd>Alt</kbd>+<kbd>`</kbd>                  | 按住录音（push-to-talk）或按一下切换      |
+| 切换 ASR 引擎 | <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>E</kbd> | 循环切换可用引擎                          |
+| 切换注入模式  | <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>V</kbd> | 键盘模拟 / 剪贴板粘贴                     |
+| TTS 触发      | <kbd>Alt</kbd>+<kbd>T</kbd>                  | 朗读选中文字（或剪贴板内容）              |
+
+录音热键的行为取决于 **Record Mode**（可在托盘菜单或设置里切换）：
+- **Push-to-Talk**（默认）：按住 `Alt+`` 录音，松手停止并识别
+- **Toggle**：按一下 `Alt+`` 开始，再按一下停止并识别
 
 所有快捷键可在 `config.toml` 中自定义。
 
@@ -346,6 +356,7 @@ cargo run --release
 ```
 ASR Engine   ▸  whisper-cpp / openai / mimo / aliyun / whisper-local   (✓ 当前)
 Inject Mode  ▸  Keyboard / Clipboard                                    (✓ 当前)
+Record Mode  ▸  Push-to-Talk (hold) / Toggle (press)                    (✓ 当前)
 ─────────────
 TTS Engine   ▸  edge-tts / mimo-tts                                      (✓ 当前)
 TTS Input    ▸  Selection (Ctrl+C) / Clipboard                           (✓ 当前)
@@ -363,11 +374,11 @@ Quit
 
 配置文件位置：
 
-| 平台 | 路径 |
-|------|------|
-| Windows | `%APPDATA%\vox\vox\config\config.toml` |
-| macOS | `~/Library/Application Support/com.vox/vox/config.toml` |
-| Linux | `~/.config/vox/config.toml` |
+| 平台    | 路径                                                      |
+| ------- | --------------------------------------------------------- |
+| Windows | `%APPDATA%\vox\vox\config\config.toml`                  |
+| macOS   | `~/Library/Application Support/com.vox/vox/config.toml` |
+| Linux   | `~/.config/vox/config.toml`                             |
 
 ```toml
 [hotkey]
@@ -418,20 +429,20 @@ speed = 1.0
 
 ### ASR
 
-| 引擎 | 类型 | 状态 |
-|------|------|------|
-| **whisper.cpp** (`whisper-cpp`) | 本地（HTTP 服务） | ✅ 默认 — 免密钥、无 FFI |
-| **OpenAI 兼容** (`openai`) | 云端/本地（REST multipart） | ✅ `base_url` 可指向 localhost |
-| **Mimo ASR** (`mimo`) | 云端（多模态对话） | ✅ 需 API Key |
-| **阿里云 ASR** (`aliyun`) | 云端（一句话识别） | ✅ 需 appkey + token |
-| **Whisper 本地** (`whisper-local`) | 本地（whisper-rs FFI） | ⚠️ 需 `--features whisper-local` + libclang |
+| 引擎                                       | 类型                        | 状态                                           |
+| ------------------------------------------ | --------------------------- | ---------------------------------------------- |
+| **whisper.cpp** (`whisper-cpp`)    | 本地（HTTP 服务）           | ✅ 默认 — 免密钥、无 FFI                      |
+| **OpenAI 兼容** (`openai`)         | 云端/本地（REST multipart） | ✅`base_url` 可指向 localhost                |
+| **Mimo ASR** (`mimo`)              | 云端（多模态对话）          | ✅ 需 API Key                                  |
+| **阿里云 ASR** (`aliyun`)          | 云端（一句话识别）          | ✅ 需 appkey + token                           |
+| **Whisper 本地** (`whisper-local`) | 本地（whisper-rs FFI）      | ⚠️ 需`--features whisper-local` + libclang |
 
 ### TTS
 
-| 引擎 | 类型 | 状态 |
-|------|------|------|
+| 引擎                              | 类型                 | 状态                      |
+| --------------------------------- | -------------------- | ------------------------- |
 | **Edge TTS** (`edge-tts`) | 云端（免费、免密钥） | ✅ 默认 — 微软 Edge 朗读 |
-| **Mimo TTS** (`mimo-tts`) | 云端（神经 TTS） | ✅ 需 API Key |
+| **Mimo TTS** (`mimo-tts`) | 云端（神经 TTS）     | ✅ 需 API Key             |
 
 ---
 

@@ -29,6 +29,8 @@ pub enum TrayEvent {
     OpenSettings,
     SetTtsEngine(String),
     SetTtsInputMode(String),
+    /// "ptt" | "toggle"
+    SetRecordMode(String),
 }
 
 /// Commands sent FROM the main thread TO the tray thread.
@@ -53,6 +55,8 @@ pub struct MenuModel {
     pub tts_active: String,
     /// "selection" | "clipboard"
     pub tts_input_mode: String,
+    /// "ptt" | "toggle"
+    pub record_mode: String,
     pub app_state: AppState,
 }
 
@@ -83,6 +87,10 @@ fn tts_id(name: &str) -> String {
 }
 fn ttsinput_id(mode: &str) -> String {
     format!("ttsinput:{}", mode)
+}
+
+fn recordmode_id(mode: &str) -> String {
+    format!("recordmode:{}", mode)
 }
 
 /// Build the tray menu from a model, with checkmarks on active items.
@@ -117,6 +125,20 @@ fn build_menu(m: &MenuModel) -> Menu {
         ));
     }
     let _ = menu.append(&inject_menu);
+
+    // ── Input group: record mode (push-to-talk vs toggle) ────────────
+    let record_menu = Submenu::new("Record Mode", true);
+    for (mode, label) in &[("ptt", "Push-to-Talk (hold)"), ("toggle", "Toggle (press)")] {
+        let checked = mode == &m.record_mode;
+        let _ = record_menu.append(&CheckMenuItem::with_id(
+            recordmode_id(mode),
+            label,
+            true,
+            checked,
+            None,
+        ));
+    }
+    let _ = menu.append(&record_menu);
 
     let _ = menu.append(&PredefinedMenuItem::separator());
 
@@ -192,6 +214,11 @@ fn map_event(id: &str, model: &MenuModel) -> Option<TrayEvent> {
     if let Some(mode) = id.strip_prefix("ttsinput:") {
         if mode == "selection" || mode == "clipboard" {
             return Some(TrayEvent::SetTtsInputMode(mode.to_string()));
+        }
+    }
+    if let Some(mode) = id.strip_prefix("recordmode:") {
+        if mode == "ptt" || mode == "toggle" {
+            return Some(TrayEvent::SetRecordMode(mode.to_string()));
         }
     }
     None

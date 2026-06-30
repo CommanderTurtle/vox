@@ -26,8 +26,8 @@ Voice I/O companion for CLI AI agents — system-tray app providing global ASR (
 
 ```
 main.rs (event loop: crossbeam::select! tray events × hotkey events)
-├── app/         — state.rs (AppState: Idle/Recording/Transcribing)
-│                  hotkey.rs (HotkeyBinding parser, rdev listener thread)
+├── app/         — state.rs (AppState: Idle/Recording/Transcribing; RecordMode: PushToTalk/Toggle)
+│                  hotkey.rs (HotkeyBinding parser, rdev listener; emits Pressed+Released for PTT)
 ├── asr/         — mod.rs (AsrEngine trait + AsrManager + fallback chain)
 │                  whisper_cpp.rs (local whisper.cpp HTTP server, /inference)
 │                  mimo_asr.rs (Mimo chat completions API, input_audio data URL)
@@ -57,7 +57,8 @@ main.rs (event loop: crossbeam::select! tray events × hotkey events)
 - **Non-blocking main loop**: ASR/TTS run as tasks on a shared `tokio::runtime::Runtime` (`AppCtx.runtime`); results come back via the `asr_result_rx` channel. The main loop never `block_on`s — hotkeys/tray stay responsive
 - **Engine managers are `Arc`-shared**: `AsrManager`/`TtsManager` store engines in a `Vec` (registration order preserved) and keep `active` behind a `RwLock`, so an `Arc<Manager>` can be cloned into background tasks
 - **Tray thread**: dedicated thread + `PeekMessageW` loop on Windows. Menu + tooltip are rebuilt from a plain-data `MenuModel` on `TrayCommand::RefreshMenu` — main thread pushes a fresh model on any state change
-- **Menu IDs**: namespaced string IDs (`asr:<name>`, `inject:<mode>`, `tts:<name>`, `ttsinput:<mode>`, `toggle`, `settings`, `quit`) → resolved in `map_event`
+- **Menu IDs**: namespaced string IDs (`asr:<name>`, `inject:<mode>`, `recordmode:<mode>`, `tts:<name>`, `ttsinput:<mode>`, `toggle`, `settings`, `quit`) → resolved in `map_event`
+- **Record mode**: `RecordMode` (PushToTalk/Toggle) in `AppCtx`; the hotkey listener already emits both `RecordTogglePressed` and `RecordToggleReleased`. `handle_hotkey_event` dispatches: PTT → `start_recording` on press, `stop_recording` on release; Toggle → `toggle_recording` on press, ignore release. Switchable live via tray menu / settings (`general.record_mode`)
 - **Settings decoupling**: the egui window holds a `Config` snapshot and sends the edited snapshot back via channel on save; it never touches disk/`toml`. `apply_settings` (main thread) persists + rebuilds engines + refreshes tray, all live
 - **Clipboard safety**: `ClipboardSnapshot` saves/restores text *or* image around Ctrl+C/V simulation, so non-text clipboard contents aren't destroyed
 - **Edge TTS**: WebSocket to `speech.platform.bing.com`; `Sec-MS-GEC` = uppercased SHA-256 of (Unix secs rounded down to 5 min → Windows file-time ticks + trusted token). Requires `MUID` cookie + `chrome-extension://…` Origin. Returns MP3 → decoded & played in-process by `rodio`
