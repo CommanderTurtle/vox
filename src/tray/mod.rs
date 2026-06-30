@@ -110,7 +110,7 @@ fn build_menu(m: &MenuModel) -> Menu {
         let label = if *mode == "keyboard" { "Keyboard" } else { "Clipboard" };
         let _ = inject_menu.append(&CheckMenuItem::with_id(
             inject_id(mode),
-            label.to_string(),
+            label,
             true,
             checked,
             None,
@@ -145,7 +145,7 @@ fn build_menu(m: &MenuModel) -> Menu {
         };
         let _ = ttsinput_menu.append(&CheckMenuItem::with_id(
             ttsinput_id(mode),
-            label.to_string(),
+            label,
             true,
             checked,
             None,
@@ -222,7 +222,7 @@ pub fn spawn_tray(
             .with_icon(icon)
             .with_menu(Box::new(menu))
             .with_menu_on_left_click(false)
-            .with_tooltip(&initial_model.tooltip())
+            .with_tooltip(initial_model.tooltip())
             .build()
         {
             Ok(t) => t,
@@ -299,7 +299,7 @@ fn pump_windows_messages(
                             *g = new_model.clone();
                         }
                         let menu = build_menu(&new_model);
-                        let _ = tray.set_menu(Some(Box::new(menu)));
+                        tray.set_menu(Some(Box::new(menu)));
                         let _ = tray.set_tooltip(Some(tip));
                     }
                     Ok(TrayCommand::Shutdown)
@@ -340,7 +340,7 @@ fn block_on_commands(
                     *g = new_model.clone();
                 }
                 let menu = build_menu(&new_model);
-                let _ = tray.set_menu(Some(Box::new(menu)));
+                tray.set_menu(Some(Box::new(menu)));
                 let _ = tray.set_tooltip(Some(tip));
             }
             TrayCommand::Shutdown => break,
@@ -365,8 +365,8 @@ fn create_default_icon() -> Result<Icon, Box<dyn std::error::Error>> {
             let dist = (dx * dx + dy * dy).sqrt();
 
             let is_in_circle = dist < 11.0;
-            let is_stand = (y >= 20 && y < 26) && (x >= 13 && x < 19);
-            let is_base = (y >= 26 && y < 28) && (x >= 10 && x < 22);
+            let is_stand = (20..26).contains(&y) && (13..19).contains(&x);
+            let is_base = (26..28).contains(&y) && (10..22).contains(&x);
 
             if is_in_circle || is_stand || is_base {
                 rgba.push(64);

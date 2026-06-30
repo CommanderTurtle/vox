@@ -27,7 +27,6 @@ use tray::{TrayEvent, TrayCommand, MenuModel, spawn_tray, refresh_menu};
 use tts::TtsManager;
 use tts::TtsInputMode;
 use tts::mimo_tts::MimoTtsEngine;
-use tts::playback::play_wav_async;
 
 /// Result of an async ASR job, posted back to the main loop.
 enum AsrResult {
@@ -59,6 +58,11 @@ struct AppCtx {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
+    // Install the rustls crypto provider once, up front. tokio-tungstenite
+    // (used by Edge TTS) needs a CryptoProvider installed before any TLS
+    // handshake, and rustls no longer picks one automatically.
+    let _ = rustls::crypto::ring::default_provider().install_default();
+
     // ── CLI subcommands (debug/testing) ──────────────────────────────────
     let args: Vec<String> = std::env::args().collect();
     if args.len() >= 2 {
@@ -68,6 +72,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             "inject" => {
                 return cmd_inject(&args[2..]);
+            }
+            "tts" => {
+                return cmd_tts(&args[2..]);
             }
             _ => {}
         }
@@ -370,12 +377,13 @@ fn trigger_tts(ctx: &mut AppCtx) {
     // not blocked — this just spawns a task and returns.
     let tts_mgr_ref = ctx.tts_mgr.clone();
     let active = ctx.tts_mgr.active_engine();
+    let fmt = ctx.tts_mgr.output_format();
     ctx.runtime.spawn(async move {
         let result = tts_mgr_ref.synthesize(&text).await;
         match result {
             Ok(audio) => {
-                log::info!("TTS synthesized {} bytes of audio", audio.len());
-                play_wav_async(audio);
+                log::info!("TTS synthesized {} bytes of audio ({:?})", audio.len(), fmt);
+                tts::playback::play_bytes_async(audio, fmt);
             }
             Err(e) => {
                 log::error!("TTS synthesis (engine '{}') failed: {}", active, e);
@@ -540,6 +548,37 @@ fn cmd_inject(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     log::info!("Injecting {} chars via {:?}", text.len(), mode);
     inject_text(&text, mode)?;
     log::info!("Injection complete.");
+    Ok(())
+}
+
+/// `cargo run -- tts <text> [output]` — synthesize via the configured TTS
+/// engine, write the audio file, and play it back. Debug subcommand to verify
+/// TTS without the GUI.
+fn cmd_tts(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+    if args.is_empty() {
+        return Err("Usage: vox tts <text> [output.{wav|mp3}]".into());
+    }
+    let text = args[0].clone();
+
+    let config_mgr = ConfigManager::load_or_create()?;
+    let tts_mgr = build_tts_manager(&config_mgr);
+    log::info!("TTS engine: {}", tts_mgr.active_engine());
+
+    let rt = tokio::runtime::Runtime::new()?;
+    let audio = rt.block_on(tts_mgr.synthesize(&text))?;
+    let fmt = tts_mgr.output_format();
+
+    // Use the caller's path if given, else pick a suffix matching the format.
+    let path = args
+        .get(1)
+        .cloned()
+        .unwrap_or_else(|| format!("tts_output{}", fmt.suffix()));
+    std::fs::write(&path, &audio)?;
+    log::info!("Wrote {} bytes ({:?}) to {}", audio.len(), fmt, path);
+
+    log::info!("Playing back...");
+    tts::playback::play_bytes(&audio, fmt)?;
+    log::info!("Playback finished.");
     Ok(())
 }
 

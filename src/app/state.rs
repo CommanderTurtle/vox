@@ -10,14 +10,3 @@ pub enum AppState {
     /// Audio captured, ASR engine is processing
     Transcribing,
 }
-
-impl AppState {
-    #[allow(dead_code)]
-    pub fn label(&self) -> &'static str {
-        match self {
-            AppState::Idle => "Idle",
-            AppState::Recording => "Recording",
-            AppState::Transcribing => "Transcribing",
-        }
-    }
-}

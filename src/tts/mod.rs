@@ -37,7 +37,6 @@ impl TtsInputMode {
         }
     }
 
-    #[allow(dead_code)]
     pub fn as_str(&self) -> &'static str {
         match self {
             TtsInputMode::Selection => "selection",
@@ -76,8 +75,14 @@ pub trait TtsEngine: Send + Sync {
     /// Human-readable name.
     fn name(&self) -> &'static str;
 
-    /// Synthesize text to audio bytes (WAV format).
+    /// Synthesize text to audio bytes (container per `output_format`).
     async fn synthesize(&self, text: &str) -> Result<Vec<u8>, TtsError>;
+
+    /// Container format of the bytes returned by `synthesize`. Defaults to
+    /// WAV; engines returning MP3 override this.
+    fn output_format(&self) -> playback::AudioFormat {
+        playback::AudioFormat::Wav
+    }
 }
 
 /// Manages multiple TTS engines.
@@ -143,5 +148,14 @@ impl TtsManager {
             return engine.synthesize(text).await;
         }
         Err(TtsError::NoEngineAvailable)
+    }
+
+    /// Container format produced by the active engine.
+    pub fn output_format(&self) -> playback::AudioFormat {
+        let active = self.active.read().expect("active lock poisoned").clone();
+        if let Some((_, engine)) = self.engines.iter().find(|(n, _)| *n == active) {
+            return engine.output_format();
+        }
+        playback::AudioFormat::Wav
     }
 }

@@ -121,7 +121,7 @@ pub fn start_hotkey_listener(
 
             match event.event_type {
                 EventType::KeyPress(key) => {
-                    pressed.insert(key.clone());
+                    pressed.insert(key);
 
                     // Record toggle: detect press
                     if record_binding.matches(&pressed, &key) && !record_was_pressed {
@@ -151,11 +151,11 @@ pub fn start_hotkey_listener(
                     pressed.remove(&key);
 
                     // Record toggle: detect release
-                    if key == record_binding.key || record_binding.modifiers.contains(&key) {
-                        if record_was_pressed {
-                            record_was_pressed = false;
-                            let _ = sender.send(HotkeyEvent::RecordToggleReleased);
-                        }
+                    if (key == record_binding.key || record_binding.modifiers.contains(&key))
+                        && record_was_pressed
+                    {
+                        record_was_pressed = false;
+                        let _ = sender.send(HotkeyEvent::RecordToggleReleased);
                     }
 
                     // Reset debounce flags when the action's main key is released
