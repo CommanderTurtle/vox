@@ -101,8 +101,39 @@
 
 ```
 cargo build          ✅ 零错误、零警告
-cargo test           ✅ 15/15 通过
+cargo clippy         ✅ 零警告
+cargo test           ✅ 18/18 通过
 cargo run            ✅ 托盘正常启动
-Alt+` 录音 → ASR    ✅ 用户验证通过
-Alt+T 朗读选中文字  ✅ 用户验证通过
+vox transcribe x.wav ✅ 本地 whisper.cpp ASR 端到端通过
+vox tts "..."        ✅ Edge TTS 合成 MP3 + rodio 播放通过
 ```
+
+---
+
+## Task 11: 审阅修复（采样率/阻塞/UI/热键/剪贴板/安全）
+
+**涉及文件:** `src/audio/capture.rs`, `src/audio/utils.rs`, `src/main.rs`, `src/asr/mod.rs`, `src/tts/mod.rs`, `src/app/hotkey.rs`, `src/inject/*`, `src/config/*`, `src/settings/mod.rs`
+
+- 采集真实设备采样率 + 线性重采样到 16kHz（修复非 16kHz 设备识别乱码）
+- 主循环改为共享 runtime + spawn，ASR/TTS 不再 block_on 阻塞 UI
+- whisper-local 读取配置 model_path；引擎 Vec 保序；active 用 RwLock 支持 Arc 共享
+- 热键 per-press 去抖；设置经 channel 实时生效；ClipboardSnapshot 保护非文本剪贴板
+- 移除硬编码 API key
+
+**验收:** ✅ cargo test 18/18；ASR/TTS 端到端验证
+
+---
+
+## Task 12: 免密钥 Edge TTS + 本地 ASR + 菜单/设置解耦
+
+**涉及文件:** `src/tts/edge_tts.rs` (新), `src/tts/playback.rs`, `src/asr/whisper_cpp.rs` (新), `src/asr/openai_asr.rs`, `src/config/*`, `src/tray/mod.rs`, `src/settings/mod.rs`, `src/main.rs`, `Cargo.toml`
+
+- Edge TTS：WebSocket 免密钥，Sec-MS-GEC（5 分钟对齐 + SHA-256），MUID cookie，返回 MP3
+- 播放改为 rodio 进程内解码（WAV/MP3），弃用外部播放器命令
+- whisper.cpp HTTP ASR 引擎；OpenAI ASR base_url 可指向 localhost
+- 默认主引擎改为 whisper-cpp + edge-tts，开箱免密钥可测
+- 托盘菜单由 MenuModel 渲染，分组 + CheckMenuItem 勾选 + 实时刷新
+- 设置窗口改为 Config 快照纯视图，经 channel 回传，apply_settings 实时生效
+- rustls ring provider 启动时安装
+
+**验收:** ✅ `vox transcribe` 走 whisper.cpp 返回识别文本；`vox tts` 合成 MP3 并播放；clippy 零警告

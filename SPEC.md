@@ -14,14 +14,15 @@
 - 需要文字朗读的多模态场景
 
 ### Success Criteria
-- 全局热键启停录音 → 文字 **≤3 秒**内出现在目标输入位置（云端 ASR）
-- TTS 热键朗读选中文字或剪贴板内容
+- 全局热键启停录音 → 文字出现在目标输入位置（本地 ASR 离线可用，云端按需）
+- TTS 热键朗读选中文字或剪贴板内容（默认免费 Edge TTS，免密钥）
 - 软件完全无窗口运行，仅系统托盘图标交互
-- 支持多 ASR 引擎并可热切换（Mimo / OpenAI / 阿里云 / 本地 Whisper）
-- 支持 TTS 引擎并可热切换
+- 支持多 ASR 引擎并可热切换（whisper.cpp / OpenAI 兼容 / Mimo / 阿里云 / 本地 whisper-rs）
+- 支持 TTS 引擎并可热切换（Edge TTS / Mimo TTS）
 - 插件式架构，新增引擎无需改核心逻辑
 - 支持 2 种文字注入模式（模拟键盘 / 剪贴板粘贴）并可切换
-- 非录音时零 CPU/GPU 占用（<5MB 常驻内存）
+- 非录音时零 CPU/GPU 占用（空闲常驻内存低）
+- 主事件循环在 ASR/TTS 期间不阻塞（热键/托盘全程可响应）
 - 在 Windows / macOS / Linux 上编译通过并正常工作
 
 ---
@@ -99,10 +100,11 @@ vox/
     │   └── utils.rs             # WAV 编码/RMS 电平
     ├── asr/
     │   ├── mod.rs               # AsrEngine trait + AsrManager + fallback
-    │   ├── whisper_local.rs     # whisper.cpp FFI (feature-gated)
+    │   ├── whisper_cpp.rs       # whisper.cpp HTTP 服务 (/inference, 本地)
+    │   ├── whisper_local.rs     # whisper-rs FFI (feature-gated)
     │   ├── mimo_asr.rs          # 小米 Mimo 多模态 API
     │   ├── aliyun_asr.rs        # 阿里云一句话识别 REST
-    │   └── openai_asr.rs        # OpenAI Whisper API
+    │   └── openai_asr.rs        # OpenAI 兼容 /audio/transcriptions (base_url 可指向 localhost)
     ├── inject/
     │   ├── mod.rs               # InjectMode + inject_text()
     │   ├── keyboard.rs          # enigo 键盘模拟
@@ -110,8 +112,9 @@ vox/
     │   └── text_reader.rs       # Ctrl+C 模拟读选中文字
     ├── tts/
     │   ├── mod.rs               # TtsEngine trait + TtsManager + TtsInputMode
+    │   ├── edge_tts.rs          # 微软 Edge TTS (WebSocket, 免密钥, MP3)
     │   ├── mimo_tts.rs          # 小米 Mimo TTS (base64 PCM → WAV)
-    │   └── playback.rs          # temp WAV → 系统播放器
+    │   └── playback.rs          # rodio 进程内解码播放 (WAV/MP3)
     ├── config/
     │   ├── mod.rs               # ConfigManager (TOML)
     │   └── defaults.toml        # 默认配置（编译时嵌入）
@@ -202,33 +205,37 @@ pub enum InjectError { /* Keyboard / Clipboard */ }
 
 | 模块 | 方案 |
 |------|------|
-| 音频捕获 | `cpal` |
-| 全局热键 | `rdev` |
-| 系统托盘 | `tray-icon` + Windows `PeekMessageW` |
+| 音频捕获 | `cpal`（按设备真实采样率采集，线性重采样到 16kHz） |
+| 全局热键 | `rdev`（每个动作 per-press 去抖，避免自动重复连发） |
+| 系统托盘 | `tray-icon` + Windows `PeekMessageW`；菜单由 `MenuModel` 渲染 |
 | 云 ASR/TTS | `reqwest` + `serde_json` |
-| 本地 ASR | `whisper-rs` (feature-gated) |
+| 本地 ASR | whisper.cpp HTTP 服务（`whisper-cpp` 引擎，无 FFI）；`whisper-rs`（feature-gated FFI） |
+| Edge TTS | `tokio-tungstenite` WebSocket（免密钥，返回 MP3） |
+| 音频播放 | `rodio`（进程内解码 WAV/MP3，跨平台一致） |
 | 键盘模拟 | `enigo` |
-| 剪贴板 | `arboard` |
-| 配置 | `serde` + `toml` + `directories` |
-| 设置 UI | `egui` + `eframe` |
-| 异步 | `tokio` + `async-trait` |
-| 音频格式 | `hound` (WAV) |
+| 剪贴板 | `arboard` + `ClipboardSnapshot`（文本/图像快照保护） |
+| 配置 | `serde` + `toml` + `directories`（`#[serde(default)]` 向后兼容） |
+| 设置 UI | `egui` + `eframe`（纯视图，经 channel 回传 Config 快照） |
+| 异步 | `tokio` + `async-trait`；共享 runtime + 后台任务，主循环不阻塞 |
+| 音频格式 | `hound`（WAV 编码） |
 | 跨线程 | `crossbeam` |
+| TLS | `rustls`（ring provider，启动时安装） |
 
 ## 附录 B: 工作流
 
 ```
-ASR 流程:
-  Alt+` 按下 → capture.start()
-  → 托盘变为 Recording
-  Alt+` 松开 → capture.stop() → PCM → WAV
-  → AsrEngine::transcribe(wav) → text
-  → inject_text(text) → 光标处出现文字
-  → 托盘回到 Idle
+ASR 流程 (非阻塞):
+  Alt+` 按下 → capture.start() → 托盘 Recording
+  Alt+` 再按 → capture.stop() → 真实采样率 PCM
+            → 重采样到 16kHz → pcm_to_wav
+            → runtime.spawn(asr_mgr.transcribe(wav))   # 不阻塞主循环
+            → 托盘 Transcribing
+  后台任务完成 → asr_result_rx → inject_text(text) → 托盘 Idle
 
-TTS 流程:
-  选中文字 → Alt+T 按下
-  → text_reader::read_selected_text()  (或 read_clipboard_text)
-  → TtsEngine::synthesize(text) → WAV bytes
-  → play_wav_async(wav) → 系统播放器发声
+TTS 流程 (非阻塞):
+  选中文字 → Alt+T
+  → text_reader::read_selected_text() (或 read_clipboard_text)
+  → runtime.spawn(tts_mgr.synthesize(text))   # 不阻塞主循环
+  → TtsEngine::synthesize → MP3/WAV bytes
+  → rodio 进程内解码播放
 ```

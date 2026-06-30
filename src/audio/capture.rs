@@ -13,11 +13,11 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 pub struct AudioCapture {
     /// Shared stop signal — set to true to stop recording.
     stop_flag: Arc<AtomicBool>,
-    /// Collected PCM i16 samples (16 kHz, mono).
+    /// Collected PCM i16 samples (mono).
     samples: Arc<std::sync::Mutex<Vec<i16>>>,
-    /// The sample rate of the captured audio.
-    #[allow(dead_code)]
-    sample_rate: u32,
+    /// Actual sample rate reported by the capture device.
+    /// Filled by the capture thread once the device config is known.
+    sample_rate: Arc<std::sync::Mutex<Option<u32>>>,
 }
 
 impl AudioCapture {
@@ -27,10 +27,12 @@ impl AudioCapture {
     pub fn start() -> Result<Self, Box<dyn std::error::Error>> {
         let stop_flag = Arc::new(AtomicBool::new(false));
         let samples = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sample_rate = Arc::new(std::sync::Mutex::new(None));
 
         let stop_flag_clone = stop_flag.clone();
         let stop_flag_for_wait = stop_flag.clone(); // for the blocking loop below
         let samples_clone = samples.clone();
+        let sample_rate_clone = sample_rate.clone();
 
         std::thread::spawn(move || {
             let host = cpal::default_host();
@@ -54,8 +56,14 @@ impl AudioCapture {
 
             log::info!("Input config: {:?}", config);
 
-            let _sample_rate = config.sample_rate().0;
+            let device_sample_rate = config.sample_rate().0;
             let channels = config.channels() as usize;
+
+            // Record the actual device sample rate so callers can encode the
+            // WAV with the correct rate (or resample afterwards).
+            if let Ok(mut sr) = sample_rate_clone.lock() {
+                *sr = Some(device_sample_rate);
+            }
 
             let err_fn = |err| {
                 log::error!("Audio capture stream error: {}", err);
@@ -141,7 +149,7 @@ impl AudioCapture {
         Ok(AudioCapture {
             stop_flag,
             samples,
-            sample_rate: 16000,
+            sample_rate,
         })
     }
 
@@ -153,9 +161,12 @@ impl AudioCapture {
         guard.clone()
     }
 
-    /// Get the sample rate of the captured audio.
-    #[allow(dead_code)]
+    /// Get the actual sample rate of the captured audio.
+    /// Returns 16000 as a sane default if the device rate was never reported.
     pub fn sample_rate(&self) -> u32 {
         self.sample_rate
+            .lock()
+            .map(|g| g.unwrap_or(16000))
+            .unwrap_or(16000)
     }
 }

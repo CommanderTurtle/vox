@@ -38,11 +38,15 @@ pub struct HotkeyConfig {
 pub struct AsrConfig {
     pub primary_engine: String,
     pub fallback_engines: Vec<String>,
-    #[serde(rename = "whisper_local")]
+    #[serde(rename = "whisper_local", default)]
     pub whisper_local: WhisperLocalConfig,
     #[serde(default)]
+    pub whisper_cpp: WhisperCppConfig,
+    #[serde(default)]
     pub mimo: MimoConfig,
+    #[serde(default)]
     pub aliyun: AliyunConfig,
+    #[serde(default)]
     pub openai: OpenaiConfig,
 }
 
@@ -50,6 +54,29 @@ pub struct AsrConfig {
 pub struct WhisperLocalConfig {
     pub model: String,
     pub model_path: String,
+}
+
+impl Default for WhisperLocalConfig {
+    fn default() -> Self {
+        Self {
+            model: "base".to_string(),
+            model_path: String::new(),
+        }
+    }
+}
+
+/// Local ASR via the whisper.cpp HTTP server.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct WhisperCppConfig {
+    pub base_url: String,
+}
+
+impl Default for WhisperCppConfig {
+    fn default() -> Self {
+        Self {
+            base_url: "http://127.0.0.1:8080".to_string(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -69,39 +96,63 @@ impl Default for MimoConfig {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct AliyunConfig {
+    #[serde(default)]
     pub appkey: String,
+    #[serde(default)]
     pub token: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct OpenaiConfig {
+    #[serde(default)]
+    pub base_url: String,
+    #[serde(default)]
     pub api_key: String,
+    #[serde(default)]
     pub model: String,
+}
+
+impl Default for OpenaiConfig {
+    fn default() -> Self {
+        Self {
+            base_url: "https://api.openai.com/v1".to_string(),
+            api_key: String::new(),
+            model: "whisper-1".to_string(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct TtsConfig {
     pub primary_engine: String,
+    #[serde(default)]
     pub input_mode: String,
+    #[serde(default)]
     pub mimo: MimoTtsConfig,
+    #[serde(default)]
+    pub edge: EdgeTtsConfig,
 }
 
 impl Default for TtsConfig {
     fn default() -> Self {
         Self {
-            primary_engine: "mimo-tts".to_string(),
+            primary_engine: "edge-tts".to_string(),
             input_mode: "selection".to_string(),
             mimo: MimoTtsConfig::default(),
+            edge: EdgeTtsConfig::default(),
         }
     }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct MimoTtsConfig {
+    #[serde(default)]
     pub model: String,
+    #[serde(default)]
     pub voice: String,
+    #[serde(default)]
     pub speed: f64,
 }
 
@@ -111,6 +162,44 @@ impl Default for MimoTtsConfig {
             model: "mimo-v2.5-tts".to_string(),
             voice: "default".to_string(),
             speed: 1.0,
+        }
+    }
+}
+
+/// Microsoft Edge TTS (free, no API key).
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct EdgeTtsConfig {
+    /// Voice name, e.g. `zh-CN-XiaoxiaoNeural`, `en-US-AriaNeural`.
+    #[serde(default = "default_edge_voice")]
+    pub voice: String,
+    /// Speech rate, e.g. `+0%`, `+10%`.
+    #[serde(default = "default_edge_zero_pct")]
+    pub rate: String,
+    /// Speech volume, e.g. `+0%`.
+    #[serde(default = "default_edge_zero_pct")]
+    pub volume: String,
+    /// Speech pitch, e.g. `+0Hz`.
+    #[serde(default = "default_edge_zero_hz")]
+    pub pitch: String,
+}
+
+fn default_edge_voice() -> String {
+    "zh-CN-XiaoxiaoNeural".to_string()
+}
+fn default_edge_zero_pct() -> String {
+    "+0%".to_string()
+}
+fn default_edge_zero_hz() -> String {
+    "+0Hz".to_string()
+}
+
+impl Default for EdgeTtsConfig {
+    fn default() -> Self {
+        Self {
+            voice: default_edge_voice(),
+            rate: default_edge_zero_pct(),
+            volume: default_edge_zero_pct(),
+            pitch: default_edge_zero_hz(),
         }
     }
 }
@@ -233,10 +322,12 @@ mod tests {
     fn test_default_config_is_valid() {
         let config = Config::default();
         assert_eq!(config.hotkey.record_toggle, "Alt+`");
-        assert_eq!(config.asr.primary_engine, "mimo");
+        assert_eq!(config.asr.primary_engine, "whisper-cpp");
         assert_eq!(config.inject.mode, "keyboard");
         assert_eq!(config.hotkey.tts_trigger, "Alt+T");
-        assert_eq!(config.tts.primary_engine, "mimo-tts");
+        assert_eq!(config.tts.primary_engine, "edge-tts");
+        assert_eq!(config.tts.edge.voice, "zh-CN-XiaoxiaoNeural");
+        assert_eq!(config.asr.whisper_cpp.base_url, "http://127.0.0.1:8080");
     }
 
     #[test]

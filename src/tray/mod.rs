@@ -1,12 +1,20 @@
 //! System tray icon and context menu for vox.
 //!
-//! On Windows, the tray icon **must** live on a thread that pumps
-//! Windows messages, otherwise right-click and menu events won't work.
-//! This module spawns a dedicated thread for that purpose.
+//! On Windows, the tray icon **must** live on a thread that pumps Windows
+//! messages, otherwise right-click and menu events won't work. This module
+//! spawns a dedicated thread for that purpose.
+//!
+//! ## Decoupling
+//! The menu is built from a plain-data [`MenuModel`] rather than being
+//! hard-coded. The main thread owns the model (it knows the active engine /
+//! mode / state) and pushes a refreshed model to the tray thread via
+//! [`TrayCommand::RefreshMenu`] whenever something changes; the tray thread
+//! rebuilds the menu and tooltip from it. Neither side knows the other's
+//! internals.
 
 use tray_icon::{Icon, TrayIconBuilder};
 pub use tray_icon::TrayIcon;
-use tray_icon::menu::{Menu, MenuEvent, MenuItem, Submenu};
+use tray_icon::menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
 
 use crate::app::state::AppState;
 
@@ -14,7 +22,7 @@ use crate::app::state::AppState;
 #[derive(Debug, Clone)]
 pub enum TrayEvent {
     Quit,
-    #[allow(dead_code)]
+    /// Left-click / "Toggle Recording" menu item.
     ToggleRecording,
     SetEngine(String),
     SetInjectMode(String),
@@ -26,29 +34,179 @@ pub enum TrayEvent {
 /// Commands sent FROM the main thread TO the tray thread.
 #[derive(Debug)]
 pub enum TrayCommand {
-    /// Update the tooltip text.
-    SetTooltip(String),
+    /// Refresh the menu + tooltip from a fresh model (active selections,
+    /// app state, engine lists).
+    RefreshMenu(MenuModel),
     /// Shut down the tray thread.
     Shutdown,
 }
 
-/// Spawn the tray icon on a dedicated thread and return a channel
-/// for receiving user events and a sender for sending commands back.
-///
-/// The tray thread will run a Windows message pump (on Windows) or
-/// simply block (on other platforms).  It closes when `cmd_tx` is
-/// dropped or a `Shutdown` command is received.
+/// Plain-data description of the tray menu. Built by the main thread from
+/// live app state; the tray thread renders it.
+#[derive(Debug, Clone)]
+pub struct MenuModel {
+    pub asr_engines: Vec<String>,
+    pub asr_active: String,
+    /// "keyboard" | "clipboard"
+    pub inject_mode: String,
+    pub tts_engines: Vec<String>,
+    pub tts_active: String,
+    /// "selection" | "clipboard"
+    pub tts_input_mode: String,
+    pub app_state: AppState,
+}
+
+impl MenuModel {
+    fn tooltip(&self) -> String {
+        let state = match self.app_state {
+            AppState::Idle => "Idle",
+            AppState::Recording => "Recording…",
+            AppState::Transcribing => "Transcribing…",
+        };
+        format!("vox — {} | ASR: {} | TTS: {}", state, self.asr_active, self.tts_active)
+    }
+}
+
+// ── Menu item id helpers ──────────────────────────────────────────────
+const ID_TOGGLE: &str = "toggle";
+const ID_SETTINGS: &str = "settings";
+const ID_QUIT: &str = "quit";
+
+fn asr_id(name: &str) -> String {
+    format!("asr:{}", name)
+}
+fn inject_id(mode: &str) -> String {
+    format!("inject:{}", mode)
+}
+fn tts_id(name: &str) -> String {
+    format!("tts:{}", name)
+}
+fn ttsinput_id(mode: &str) -> String {
+    format!("ttsinput:{}", mode)
+}
+
+/// Build the tray menu from a model, with checkmarks on active items.
+fn build_menu(m: &MenuModel) -> Menu {
+    let menu = Menu::new();
+
+    // ── Input group: ASR engine ────────────────────────────────────────
+    let asr_menu = Submenu::new("ASR Engine", true);
+    for name in &m.asr_engines {
+        let checked = name == &m.asr_active;
+        let _ = asr_menu.append(&CheckMenuItem::with_id(
+            asr_id(name),
+            name.clone(),
+            true,
+            checked,
+            None,
+        ));
+    }
+    let _ = menu.append(&asr_menu);
+
+    // ── Input group: inject mode ───────────────────────────────────────
+    let inject_menu = Submenu::new("Inject Mode", true);
+    for mode in &["keyboard", "clipboard"] {
+        let checked = mode == &m.inject_mode;
+        let label = if *mode == "keyboard" { "Keyboard" } else { "Clipboard" };
+        let _ = inject_menu.append(&CheckMenuItem::with_id(
+            inject_id(mode),
+            label,
+            true,
+            checked,
+            None,
+        ));
+    }
+    let _ = menu.append(&inject_menu);
+
+    let _ = menu.append(&PredefinedMenuItem::separator());
+
+    // ── Output group: TTS engine ───────────────────────────────────────
+    let tts_menu = Submenu::new("TTS Engine", true);
+    for name in &m.tts_engines {
+        let checked = name == &m.tts_active;
+        let _ = tts_menu.append(&CheckMenuItem::with_id(
+            tts_id(name),
+            name.clone(),
+            true,
+            checked,
+            None,
+        ));
+    }
+    let _ = menu.append(&tts_menu);
+
+    // ── Output group: TTS input mode ───────────────────────────────────
+    let ttsinput_menu = Submenu::new("TTS Input", true);
+    for mode in &["selection", "clipboard"] {
+        let checked = mode == &m.tts_input_mode;
+        let label = if *mode == "selection" {
+            "Selection (Ctrl+C)"
+        } else {
+            "Clipboard"
+        };
+        let _ = ttsinput_menu.append(&CheckMenuItem::with_id(
+            ttsinput_id(mode),
+            label,
+            true,
+            checked,
+            None,
+        ));
+    }
+    let _ = menu.append(&ttsinput_menu);
+
+    let _ = menu.append(&PredefinedMenuItem::separator());
+
+    // ── Actions ────────────────────────────────────────────────────────
+    let _ = menu.append(&MenuItem::with_id(ID_TOGGLE, "Toggle Recording", true, None));
+    let _ = menu.append(&MenuItem::with_id(ID_SETTINGS, "Settings…", true, None));
+    let _ = menu.append(&MenuItem::with_id(ID_QUIT, "Quit", true, None));
+
+    menu
+}
+
+/// Map a menu event id to a [`TrayEvent`].
+fn map_event(id: &str, model: &MenuModel) -> Option<TrayEvent> {
+    if id == ID_QUIT {
+        return Some(TrayEvent::Quit);
+    }
+    if id == ID_SETTINGS {
+        return Some(TrayEvent::OpenSettings);
+    }
+    if id == ID_TOGGLE {
+        return Some(TrayEvent::ToggleRecording);
+    }
+    if let Some(name) = id.strip_prefix("asr:") {
+        if model.asr_engines.iter().any(|e| e == name) {
+            return Some(TrayEvent::SetEngine(name.to_string()));
+        }
+    }
+    if let Some(mode) = id.strip_prefix("inject:") {
+        if mode == "keyboard" || mode == "clipboard" {
+            return Some(TrayEvent::SetInjectMode(mode.to_string()));
+        }
+    }
+    if let Some(name) = id.strip_prefix("tts:") {
+        if model.tts_engines.iter().any(|e| e == name) {
+            return Some(TrayEvent::SetTtsEngine(name.to_string()));
+        }
+    }
+    if let Some(mode) = id.strip_prefix("ttsinput:") {
+        if mode == "selection" || mode == "clipboard" {
+            return Some(TrayEvent::SetTtsInputMode(mode.to_string()));
+        }
+    }
+    None
+}
+
+/// Spawn the tray icon on a dedicated thread and return a channel for
+/// sending commands to it. Tray events are delivered via `event_sender`.
 pub fn spawn_tray(
-    engines: &[String],
-    tts_engines: &[String],
+    initial_model: MenuModel,
     event_sender: crossbeam::channel::Sender<TrayEvent>,
 ) -> (crossbeam::channel::Sender<TrayCommand>, std::thread::JoinHandle<()>) {
-    let engine_list = engines.to_vec();
-    let tts_list = tts_engines.to_vec();
     let (cmd_tx, cmd_rx) = crossbeam::channel::unbounded::<TrayCommand>();
 
     let handle = std::thread::spawn(move || {
-        // ── Build icon ────────────────────────────────────────────
+        // ── Icon ───────────────────────────────────────────────────────
         let icon = match create_default_icon() {
             Ok(i) => i,
             Err(e) => {
@@ -57,58 +215,14 @@ pub fn spawn_tray(
             }
         };
 
-        // ── ASR Engine submenu ────────────────────────────────────
-        let engine_menu = Submenu::new("ASR Engine", true);
-        for name in &engine_list {
-            let item = MenuItem::with_id(name.clone(), name.clone(), true, None);
-            if let Err(e) = engine_menu.append(&item) {
-                log::error!("Failed to add menu item: {}", e);
-            }
-        }
+        // ── Initial menu ───────────────────────────────────────────────
+        let menu = build_menu(&initial_model);
 
-        // ── Inject mode submenu ───────────────────────────────────
-        let inject_menu = Submenu::new("Inject Mode", true);
-        for mode in &["keyboard", "clipboard"] {
-            let item = MenuItem::with_id((*mode).to_string(), *mode, true, None);
-            if let Err(e) = inject_menu.append(&item) {
-                log::error!("Failed to add menu item: {}", e);
-            }
-        }
-
-        // ── TTS Engine submenu ────────────────────────────────────
-        let tts_engine_menu = Submenu::new("TTS Engine", true);
-        for name in &tts_list {
-            let item = MenuItem::with_id(format!("tts_{}", name), name, true, None);
-            if let Err(e) = tts_engine_menu.append(&item) {
-                log::error!("Failed to add menu item: {}", e);
-            }
-        }
-
-        // ── TTS Input mode submenu ────────────────────────────────
-        let tts_input_menu = Submenu::new("TTS Input", true);
-        for mode in &["selection", "clipboard"] {
-            let display = if *mode == "selection" { "Selection (Ctrl+C)" } else { "Clipboard" };
-            let item = MenuItem::with_id(format!("tts_input_{}", mode), display, true, None);
-            if let Err(e) = tts_input_menu.append(&item) {
-                log::error!("Failed to add menu item: {}", e);
-            }
-        }
-
-        // ── Main menu ─────────────────────────────────────────────
-        let menu = Menu::new();
-        if let Err(e) = menu.append(&engine_menu) { log::error!("menu: {}", e); }
-        if let Err(e) = menu.append(&inject_menu) { log::error!("menu: {}", e); }
-        if let Err(e) = menu.append(&tts_engine_menu) { log::error!("menu: {}", e); }
-        if let Err(e) = menu.append(&tts_input_menu) { log::error!("menu: {}", e); }
-        if let Err(e) = menu.append(&MenuItem::with_id("settings", "Settings", true, None)) { log::error!("menu: {}", e); }
-        if let Err(e) = menu.append(&MenuItem::with_id("quit", "Quit", true, None)) { log::error!("menu: {}", e); }
-
-        // ── Tray icon ─────────────────────────────────────────────
         let tray = match TrayIconBuilder::new()
             .with_icon(icon)
             .with_menu(Box::new(menu))
             .with_menu_on_left_click(false)
-            .with_tooltip("vox — Idle")
+            .with_tooltip(initial_model.tooltip())
             .build()
         {
             Ok(t) => t,
@@ -120,93 +234,81 @@ pub fn spawn_tray(
 
         log::info!("Tray icon created on dedicated thread");
 
-        // ── Menu event listener ───────────────────────────────────
+        // Current model, updated on each RefreshMenu command. The menu
+        // event listener reads it to resolve which item was clicked.
+        let model = std::sync::Arc::new(std::sync::Mutex::new(initial_model));
+        let model_for_listener = model.clone();
+
+        // ── Menu event listener ────────────────────────────────────────
         let evt_sender = event_sender.clone();
-        let eng_list = engine_list.clone();
-        let tts_list_clone = tts_list.clone();
         std::thread::spawn(move || {
             let rx = MenuEvent::receiver();
             while let Ok(event) = rx.recv() {
-                let id = event.id().0.as_str();
-                match id {
-                    "quit" => { let _ = evt_sender.send(TrayEvent::Quit); break; }
-                    "settings" => { let _ = evt_sender.send(TrayEvent::OpenSettings); }
-                    name if eng_list.iter().any(|e| e == name) => {
-                        let _ = evt_sender.send(TrayEvent::SetEngine(name.to_string()));
+                let id = event.id().0.as_str().to_string();
+                let current = match model_for_listener.lock() {
+                    Ok(g) => g.clone(),
+                    // Poisoned: nothing useful to do; skip this event.
+                    Err(_) => continue,
+                };
+                if let Some(ev) = map_event(&id, &current) {
+                    let is_quit = matches!(ev, TrayEvent::Quit);
+                    let _ = evt_sender.send(ev);
+                    if is_quit {
+                        break;
                     }
-                    "keyboard" | "clipboard" => {
-                        let _ = evt_sender.send(TrayEvent::SetInjectMode(id.to_string()));
-                    }
-                    // TTS engine: prefix "tts_" followed by engine name
-                    tts_name if tts_list_clone.iter().any(|e| id == &format!("tts_{}", e)) => {
-                        let engine = tts_name.strip_prefix("tts_").unwrap_or(tts_name);
-                        let _ = evt_sender.send(TrayEvent::SetTtsEngine(engine.to_string()));
-                    }
-                    // TTS input mode: prefix "tts_input_"
-                    "tts_input_selection" => {
-                        let _ = evt_sender.send(TrayEvent::SetTtsInputMode("selection".to_string()));
-                    }
-                    "tts_input_clipboard" => {
-                        let _ = evt_sender.send(TrayEvent::SetTtsInputMode("clipboard".to_string()));
-                    }
-                    _ => {}
                 }
             }
         });
 
-        // ── Command listener + message pump ───────────────────────
-        // On Windows we need to pump messages for the tray icon.
-        // On other platforms we just block on the command channel.
+        // ── Command listener + message pump ───────────────────────────
         #[cfg(target_os = "windows")]
-        pump_windows_messages(&tray, &cmd_rx);
+        pump_windows_messages(&tray, &cmd_rx, &model);
 
         #[cfg(not(target_os = "windows"))]
-        block_on_commands(&cmd_rx);
+        block_on_commands(&tray, &cmd_rx, &model);
 
-        // Tray is dropped here when we exit — clean shutdown.
         log::info!("Tray thread exiting.");
     });
 
     (cmd_tx, handle)
 }
 
-/// Update the tray tooltip (sends a command to the tray thread).
-pub fn update_tray_state(cmd_tx: &crossbeam::channel::Sender<TrayCommand>, state: AppState) {
-    let tip = match state {
-        AppState::Idle => "vox — Idle",
-        AppState::Recording => "vox — Recording...",
-        AppState::Transcribing => "vox — Transcribing...",
-    };
-    let _ = cmd_tx.send(TrayCommand::SetTooltip(tip.to_string()));
+/// Build a [`MenuModel`] snapshot from the live app context (used by main).
+pub fn refresh_menu(cmd_tx: &crossbeam::channel::Sender<TrayCommand>, model: MenuModel) {
+    let _ = cmd_tx.send(TrayCommand::RefreshMenu(model));
 }
 
 // ── Windows message pump ─────────────────────────────────────────────
 
-/// Run a Windows message pump while also listening for tray commands.
-/// Uses PeekMessageW with a sleep so we can also check the command channel.
 #[cfg(target_os = "windows")]
 fn pump_windows_messages(
     tray: &TrayIcon,
     cmd_rx: &crossbeam::channel::Receiver<TrayCommand>,
+    model: &std::sync::Arc<std::sync::Mutex<MenuModel>>,
 ) {
     use std::ptr;
 
     unsafe {
         loop {
-            // Check for commands from the main thread (non-blocking)
+            // Drain commands (non-blocking).
             loop {
                 match cmd_rx.try_recv() {
-                    Ok(TrayCommand::SetTooltip(text)) => {
-                        let _ = tray.set_tooltip(Some(text));
+                    Ok(TrayCommand::RefreshMenu(new_model)) => {
+                        let tip = new_model.tooltip();
+                        if let Ok(mut g) = model.lock() {
+                            *g = new_model.clone();
+                        }
+                        let menu = build_menu(&new_model);
+                        tray.set_menu(Some(Box::new(menu)));
+                        let _ = tray.set_tooltip(Some(tip));
                     }
-                    Ok(TrayCommand::Shutdown) | Err(crossbeam::channel::TryRecvError::Disconnected) => {
-                        return;
-                    }
+                    Ok(TrayCommand::Shutdown)
+                    | Err(crossbeam::channel::TryRecvError::Disconnected) => return,
                     Err(crossbeam::channel::TryRecvError::Empty) => break,
                 }
             }
 
-            // Pump all pending Windows messages
+            // Pump all pending Windows messages.
             let mut msg: windows_sys::Win32::UI::WindowsAndMessaging::MSG =
                 std::mem::zeroed();
             while windows_sys::Win32::UI::WindowsAndMessaging::
@@ -215,26 +317,31 @@ fn pump_windows_messages(
                 if msg.message == windows_sys::Win32::UI::WindowsAndMessaging::WM_QUIT {
                     return;
                 }
-                windows_sys::Win32::UI::WindowsAndMessaging::
-                    TranslateMessage(&msg);
-                windows_sys::Win32::UI::WindowsAndMessaging::
-                    DispatchMessageW(&msg);
+                windows_sys::Win32::UI::WindowsAndMessaging::TranslateMessage(&msg);
+                windows_sys::Win32::UI::WindowsAndMessaging::DispatchMessageW(&msg);
             }
 
-            // Sleep a bit before polling again
             std::thread::sleep(std::time::Duration::from_millis(50));
         }
     }
 }
 
 #[cfg(not(target_os = "windows"))]
-fn block_on_commands(cmd_rx: &crossbeam::channel::Receiver<TrayCommand>) {
+fn block_on_commands(
+    tray: &TrayIcon,
+    cmd_rx: &crossbeam::channel::Receiver<TrayCommand>,
+    model: &std::sync::Arc<std::sync::Mutex<MenuModel>>,
+) {
     while let Ok(cmd) = cmd_rx.recv() {
         match cmd {
-            TrayCommand::SetTooltip(_) => {
-                // On non-Windows we don't hold the TrayIcon reference here,
-                // so tooltip updates from commands aren't supported this way.
-                log::warn!("Tooltip update not supported on this platform via tray thread");
+            TrayCommand::RefreshMenu(new_model) => {
+                let tip = new_model.tooltip();
+                if let Ok(mut g) = model.lock() {
+                    *g = new_model.clone();
+                }
+                let menu = build_menu(&new_model);
+                tray.set_menu(Some(Box::new(menu)));
+                let _ = tray.set_tooltip(Some(tip));
             }
             TrayCommand::Shutdown => break,
         }
@@ -258,8 +365,8 @@ fn create_default_icon() -> Result<Icon, Box<dyn std::error::Error>> {
             let dist = (dx * dx + dy * dy).sqrt();
 
             let is_in_circle = dist < 11.0;
-            let is_stand = (y >= 20 && y < 26) && (x >= 13 && x < 19);
-            let is_base = (y >= 26 && y < 28) && (x >= 10 && x < 22);
+            let is_stand = (20..26).contains(&y) && (13..19).contains(&x);
+            let is_base = (26..28).contains(&y) && (10..22).contains(&x);
 
             if is_in_circle || is_stand || is_base {
                 rgba.push(64);

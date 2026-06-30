@@ -4,29 +4,30 @@
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
-│  Thread 1 (Main): crossbeam::select! 事件循环                      │
-│  ┌──────────────┐  ┌──────────────────┐  ┌────────────────────┐  │
-│  │ 托盘事件      │  │ 热键事件           │  │ tokio Runtime      │  │
-│  │ TrayEvent    │◄─┤ HotkeyEvent      ├──►│ block_on(ASR/TTS) │  │
-│  └──────┬───────┘  └────────┬─────────┘  └────────────────────┘  │
-│         │                   │                                     │
-│  ┌──────▼───────────────────▼────────────────────────────────┐   │
-│  │  AppCtx: ConfigManager / AsrManager / TtsManager / State   │   │
-│  └───────────────────────────────────────────────────────────┘   │
-└──────────────────────────────────────────────────────────────────┘
-        │                     │
-  ┌─────▼─────┐         ┌────▼─────┐
-  │ Thread 2  │         │ Thread 3 │
-  │ rdev 热键  │         │ cpal 音频 │
-  └───────────┘         └──────────┘
+│  Thread 1 (Main): crossbeam::select! 事件循环 (非阻塞)             │
+│  ┌──────────┐ ┌──────────┐ ┌────────────┐ ┌─────────────────┐   │
+│  │ 托盘事件  │ │ 热键事件  │ │ ASR 结果    │ │ 设置保存快照     │   │
+│  │ TrayEvent│ │HotkeyEvt │ │ AsrResult  │ │ Config snapshot │   │
+│  └────┬─────┘ └────┬─────┘ └─────┬──────┘ └────────┬────────┘   │
+│       └────────────┴─────────────┴─────────────────┘             │
+│  ┌────▼──────────────────────────────────────────────────────┐  │
+│  │  AppCtx: ConfigManager / Arc<AsrManager> / Arc<TtsManager> │  │
+│  │           / InjectMode / TtsInputMode / shared Runtime      │  │
+│  └────────────────────────┬──────────────────────────────────┘  │
+└───────────────────────────┼─────────────────────────────────────┘
+        │                    │ runtime.spawn(…) (后台, 不阻塞)
+  ┌─────▼─────┐        ┌────▼─────┐         ┌──────────┐
+  │ Thread 2  │        │ Thread 3 │         │ 托盘线程  │
+  │ rdev 热键  │        │ cpal 音频 │         │ MenuModel│
+  └───────────┘        └──────────┘         └──────────┘
 ```
 
 ### 跨线程通信
-- 主线程：`crossbeam::channel` 接收 TrayEvent + HotkeyEvent
-- 热键线程 → `HotkeyEvent` channel
-- 托盘菜单线程 → `TrayEvent` channel
-- 音频采集线程：`AtomicBool` 控制启停
-- TTS 播放：`std::thread::spawn` 不阻塞主循环
+- 主线程：`crossbeam::select!` 同时接收 TrayEvent + HotkeyEvent + AsrResult + Config 快照
+- 热键线程 → `HotkeyEvent` channel（per-press 去抖）
+- 托盘线程 → `TrayEvent` channel；主线程经 `TrayCommand::RefreshMenu(MenuModel)` 推送菜单刷新
+- 音频采集线程：`AtomicBool` 控制启停，回传真实采样率
+- ASR/TTS：在共享 `tokio::runtime::Runtime` 上 `spawn`，结果经 channel 回主循环；播放由 `rodio` 在独立线程解码
 
 ---
 

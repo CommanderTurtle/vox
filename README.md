@@ -27,9 +27,9 @@
 
 - 🎤 **Voice Input** — Press a hotkey, speak, and have the transcribed text appear instantly at any cursor position (terminals, editors, browsers, anywhere)
 - 🔊 **Text-to-Speech** — Select text and press a hotkey to hear it read aloud; supports selection copy and clipboard modes
-- 🧠 **Multiple ASR Engines** — Switch between cloud engines (Mimo AI, OpenAI Whisper, Aliyun ASR) and local inference (Whisper.cpp)
-- 🗣️ **Multiple TTS Engines** — Cloud neural TTS via Mimo AI, with speed and voice configuration
-- 🪶 **Minimal Footprint** — Pure system tray icon, no main window, ~1MB release binary, zero CPU when idle
+- 🧠 **Multiple ASR Engines** — Local inference (whisper.cpp HTTP server, whisper-rs FFI) and cloud engines (OpenAI-compatible, Mimo, Aliyun) with automatic fallback
+- 🗣️ **Multiple TTS Engines** — **Free Microsoft Edge TTS** (no API key) and cloud Mimo TTS, with voice/rate/volume/pitch configuration
+- 🪶 **Minimal Footprint** — Pure system tray icon, no main window, zero CPU when idle
 - 🌍 **Global Hotkeys** — Fully customizable keybindings for all actions
 - 💻 **Cross-Platform** — Windows, macOS and Linux
 
@@ -54,12 +54,19 @@ cargo build --release
 ### Quick start
 
 ```bash
+# (Optional) Start a local ASR server so voice input works offline / free:
+#   whisper.cpp:  ./whisper-server -m ggml-tiny.bin --port 8080
+#   or any OpenAI-compatible server (faster-whisper, LocalAI, ...) pointed at
+#   [asr.openai].base_url in the config.
+# If no local server runs, vox falls back through the configured engines.
+
 # Run the app
 cargo run --release
 
 # The tray icon appears in your system tray.
 # Press Alt+` to start recording, say something, press Alt+` again.
 # The transcribed text appears at your cursor position.
+# Press Alt+T with text selected to hear it read aloud (Edge TTS, no key).
 ```
 
 ---
@@ -98,13 +105,20 @@ All keybindings are configurable in `config.toml`.
 ## Tray Menu
 
 ```
-ASR Engine       →  mimo / openai / aliyun / whisper-local
-Inject Mode      →  keyboard / clipboard
-TTS Engine       →  mimo-tts
-TTS Input        →  Selection / Clipboard
-Settings         →  Open settings window
-Quit             →  Exit vox
+ASR Engine   ▸  whisper-cpp / openai / mimo / aliyun / whisper-local   (✓ active)
+Inject Mode  ▸  Keyboard / Clipboard                                    (✓ active)
+─────────────
+TTS Engine   ▸  edge-tts / mimo-tts                                      (✓ active)
+TTS Input    ▸  Selection (Ctrl+C) / Clipboard                           (✓ active)
+─────────────
+Toggle Recording
+Settings…
+Quit
 ```
+
+The active option in each submenu is checkmarked. The menu and tooltip are
+rebuilt live from a plain-data model whenever state changes — no restart
+needed when you switch engines or modes.
 
 ---
 
@@ -126,25 +140,39 @@ inject_mode_switch = "Alt+Shift+V"
 tts_trigger = "Alt+T"
 
 [asr]
-primary_engine = "mimo"
-fallback_engines = ["whisper-local", "openai"]
+primary_engine = "whisper-cpp"          # local, no key
+fallback_engines = ["openai"]
+
+[asr.whisper_cpp]
+base_url = "http://127.0.0.1:8080"      # whisper.cpp HTTP server
+
+[asr.openai]
+base_url = "https://api.openai.com/v1"  # or a local OpenAI-compatible server
+api_key = ""
+model = "whisper-1"
 
 [asr.mimo]
 base_url = "https://token-plan-cn.xiaomimimo.com/v1"
-api_key = "your-api-key"
+api_key = ""
 model = "mimo-v2.5-asr"
 
+[inject]
+mode = "keyboard"
+
 [tts]
-primary_engine = "mimo-tts"
+primary_engine = "edge-tts"             # free, no API key
 input_mode = "selection"
+
+[tts.edge]
+voice = "zh-CN-XiaoxiaoNeural"
+rate = "+0%"
+volume = "+0%"
+pitch = "+0Hz"
 
 [tts.mimo]
 model = "mimo-v2.5-tts"
 voice = "default"
 speed = 1.0
-
-[inject]
-mode = "keyboard"
 ```
 
 ---
@@ -155,16 +183,18 @@ mode = "keyboard"
 
 | Engine | Type | Status |
 |--------|------|--------|
-| **Mimo AI ASR** (`mimo`) | Cloud (multimodal chat) | ✅ Working |
-| **OpenAI Whisper** (`openai`) | Cloud (REST API) | ✅ Implemented |
-| **Aliyun ASR** (`aliyun`) | Cloud (一句话识别) | ✅ Implemented |
-| **Whisper Local** (`whisper-local`) | Local (Whisper.cpp) | ⚠️ Requires libclang |
+| **whisper.cpp** (`whisper-cpp`) | Local (HTTP server) | ✅ Default — no key, no FFI |
+| **OpenAI-compatible** (`openai`) | Cloud / Local (REST, multipart) | ✅ `base_url` configurable for localhost |
+| **Mimo ASR** (`mimo`) | Cloud (multimodal chat) | ✅ Needs API key |
+| **Aliyun ASR** (`aliyun`) | Cloud (一句话识别) | ✅ Needs appkey + token |
+| **Whisper Local** (`whisper-local`) | Local (whisper-rs FFI) | ⚠️ Requires `--features whisper-local` + libclang |
 
 ### TTS
 
 | Engine | Type | Status |
 |--------|------|--------|
-| **Mimo AI TTS** (`mimo-tts`) | Cloud (neural TTS) | ✅ Working |
+| **Edge TTS** (`edge-tts`) | Cloud (free, no key) | ✅ Default — Microsoft Edge Read Aloud |
+| **Mimo TTS** (`mimo-tts`) | Cloud (neural TTS) | ✅ Needs API key |
 
 ---
 
@@ -175,17 +205,18 @@ vox/
 ├── Cargo.toml
 ├── SPEC.md              # Specification
 ├── PLAN.md              # Implementation plan
-├── TASKS.md             # Task breakdown
 └── src/
-    ├── main.rs          # Event loop & entry point
-    ├── app/             # State machine & hotkeys
-    ├── asr/             # ASR engine trait & implementations
-    ├── audio/           # Microphone capture & WAV utils
-    ├── config/          # TOML configuration management
-    ├── inject/          # Text injection (keyboard/clipboard/reader)
-    ├── settings/        # Minimal egui settings window
-    ├── tray/            # System tray icon & menu
-    └── tts/             # TTS engine trait & implementations
+    ├── main.rs          # Event loop, CLI subcommands, engine wiring
+    ├── app/             # State machine & global hotkeys
+    ├── asr/             # AsrEngine trait + manager (fallback) + engines
+    │                     whisper_cpp / openai / mimo / aliyun / whisper_local
+    ├── audio/           # Microphone capture, WAV encode, resampling
+    ├── config/          # TOML configuration (serde-default backwards compat)
+    ├── inject/          # Text injection (keyboard/clipboard) + clipboard snapshot
+    ├── settings/        # egui settings window (pure view over Config snapshot)
+    ├── tray/            # System tray + menu built from a MenuModel
+    └── tts/             # TtsEngine trait + manager + engines
+                          edge_tts / mimo_tts + rodio playback
 ```
 
 ---
@@ -204,6 +235,11 @@ cargo test
 
 # Build release
 cargo build --release
+
+# Debug CLI subcommands (no GUI):
+cargo run -- transcribe <audio.wav>          # test ASR with a file
+cargo run -- inject "<text>" --mode keyboard # test text injection
+cargo run -- tts "<text>" [out.mp3]          # test TTS (writes file + plays)
 ```
 
 ---
@@ -231,9 +267,9 @@ MIT
 
 - 🎤 **语音输入** — 按快捷键说话，识别文字即刻出现在任意光标位置（终端、编辑器、浏览器……）
 - 🔊 **文字转语音** — 选中文字按快捷键自动朗读；支持选中文字和剪贴板两种模式
-- 🧠 **多 ASR 引擎** — 云端引擎（小米 Mimo AI、OpenAI Whisper、阿里云 ASR）和本地推理（Whisper.cpp）自由切换
-- 🗣️ **多 TTS 引擎** — 云端神经 TTS（小米 Mimo），支持语速和音色配置
-- 🪶 **极致轻量** — 纯系统托盘图标，无主窗口，Release 产物约 1MB，空闲时零 CPU 占用
+- 🧠 **多 ASR 引擎** — 本地推理（whisper.cpp HTTP 服务、whisper-rs FFI）与云端引擎（OpenAI 兼容、Mimo、阿里云）自动 fallback
+- 🗣️ **多 TTS 引擎** — **免费微软 Edge TTS**（无需 API Key）与云端 Mimo TTS，支持音色/语速/音量/音调配置
+- 🪶 **极致轻量** — 纯系统托盘图标，无主窗口，空闲时零 CPU 占用
 - 🌍 **全局快捷键** — 所有操作快捷键完全自定义
 - 💻 **跨平台** — 支持 Windows、macOS 和 Linux
 
@@ -258,11 +294,18 @@ cargo build --release
 ### 快速上手
 
 ```bash
+# （可选）启动本地 ASR 服务，实现离线/免费语音输入：
+#   whisper.cpp:  ./whisper-server -m ggml-tiny.bin --port 8080
+#   或任意 OpenAI 兼容服务（faster-whisper、LocalAI……），把
+#   [asr.openai].base_url 指向它即可。
+# 若无本地服务，vox 会按配置的引擎链自动 fallback。
+
 # 运行
 cargo run --release
 
 # 托盘图标出现后，按 Alt+` 开始录音，说完再按 Alt+` 停止
 # 识别的文字自动出现在光标位置
+# 选中文字按 Alt+T 朗读（Edge TTS，免密钥）
 ```
 
 ---
@@ -301,13 +344,18 @@ cargo run --release
 ## 托盘菜单
 
 ```
-ASR Engine       →  mimo / openai / aliyun / whisper-local
-Inject Mode      →  keyboard / clipboard
-TTS Engine       →  mimo-tts
-TTS Input        →  Selection / Clipboard
-Settings         →  打开设置窗口
-Quit             →  退出 vox
+ASR Engine   ▸  whisper-cpp / openai / mimo / aliyun / whisper-local   (✓ 当前)
+Inject Mode  ▸  Keyboard / Clipboard                                    (✓ 当前)
+─────────────
+TTS Engine   ▸  edge-tts / mimo-tts                                      (✓ 当前)
+TTS Input    ▸  Selection (Ctrl+C) / Clipboard                           (✓ 当前)
+─────────────
+Toggle Recording
+Settings…
+Quit
 ```
+
+各子菜单的当前选项会打勾。菜单与 tooltip 由纯数据模型在状态变化时实时重建，切换引擎/模式无需重启。
 
 ---
 
@@ -329,25 +377,39 @@ inject_mode_switch = "Alt+Shift+V"
 tts_trigger = "Alt+T"
 
 [asr]
-primary_engine = "mimo"
-fallback_engines = ["whisper-local", "openai"]
+primary_engine = "whisper-cpp"          # 本地，免密钥
+fallback_engines = ["openai"]
+
+[asr.whisper_cpp]
+base_url = "http://127.0.0.1:8080"      # whisper.cpp HTTP 服务
+
+[asr.openai]
+base_url = "https://api.openai.com/v1"  # 也可指向本地 OpenAI 兼容服务
+api_key = ""
+model = "whisper-1"
 
 [asr.mimo]
 base_url = "https://token-plan-cn.xiaomimimo.com/v1"
-api_key = "你的 API Key"
+api_key = ""
 model = "mimo-v2.5-asr"
 
+[inject]
+mode = "keyboard"
+
 [tts]
-primary_engine = "mimo-tts"
+primary_engine = "edge-tts"             # 免费，无需 API Key
 input_mode = "selection"
+
+[tts.edge]
+voice = "zh-CN-XiaoxiaoNeural"
+rate = "+0%"
+volume = "+0%"
+pitch = "+0Hz"
 
 [tts.mimo]
 model = "mimo-v2.5-tts"
 voice = "default"
 speed = 1.0
-
-[inject]
-mode = "keyboard"
 ```
 
 ---
@@ -358,16 +420,18 @@ mode = "keyboard"
 
 | 引擎 | 类型 | 状态 |
 |------|------|------|
-| **小米 Mimo ASR** (`mimo`) | 云端（多模态对话） | ✅ 工作中 |
-| **OpenAI Whisper** (`openai`) | 云端（REST API） | ✅ 已实现 |
-| **阿里云 ASR** (`aliyun`) | 云端（一句话识别） | ✅ 已实现 |
-| **Whisper 本地** (`whisper-local`) | 本地（Whisper.cpp） | ⚠️ 需要 libclang |
+| **whisper.cpp** (`whisper-cpp`) | 本地（HTTP 服务） | ✅ 默认 — 免密钥、无 FFI |
+| **OpenAI 兼容** (`openai`) | 云端/本地（REST multipart） | ✅ `base_url` 可指向 localhost |
+| **Mimo ASR** (`mimo`) | 云端（多模态对话） | ✅ 需 API Key |
+| **阿里云 ASR** (`aliyun`) | 云端（一句话识别） | ✅ 需 appkey + token |
+| **Whisper 本地** (`whisper-local`) | 本地（whisper-rs FFI） | ⚠️ 需 `--features whisper-local` + libclang |
 
 ### TTS
 
 | 引擎 | 类型 | 状态 |
 |------|------|------|
-| **小米 Mimo TTS** (`mimo-tts`) | 云端（神经 TTS） | ✅ 工作中 |
+| **Edge TTS** (`edge-tts`) | 云端（免费、免密钥） | ✅ 默认 — 微软 Edge 朗读 |
+| **Mimo TTS** (`mimo-tts`) | 云端（神经 TTS） | ✅ 需 API Key |
 
 ---
 
@@ -378,17 +442,18 @@ vox/
 ├── Cargo.toml
 ├── SPEC.md              # 技术规范
 ├── PLAN.md              # 实施计划
-├── TASKS.md             # 任务拆分
 └── src/
-    ├── main.rs          # 主循环 & 入口
+    ├── main.rs          # 事件循环、CLI 子命令、引擎装配
     ├── app/             # 状态机 & 全局热键
-    ├── asr/             # ASR 引擎接口 & 实现
-    ├── audio/           # 麦克风采集 & WAV 工具
-    ├── config/          # TOML 配置管理
-    ├── inject/          # 文字注入（键盘/剪贴板/读选中文字）
-    ├── settings/        # 极简 egui 设置窗口
-    ├── tray/            # 系统托盘图标 & 菜单
-    └── tts/             # TTS 引擎接口 & 实现
+    ├── asr/             # AsrEngine trait + manager(fallback) + 各引擎
+    │                     whisper_cpp / openai / mimo / aliyun / whisper_local
+    ├── audio/           # 麦克风采集、WAV 编码、重采样
+    ├── config/          # TOML 配置（serde-default 向后兼容）
+    ├── inject/          # 文字注入（键盘/剪贴板）+ 剪贴板快照保护
+    ├── settings/        # egui 设置窗口（Config 快照的纯视图）
+    ├── tray/            # 系统托盘 + 由 MenuModel 构建的菜单
+    └── tts/             # TtsEngine trait + manager + 各引擎
+                          edge_tts / mimo_tts + rodio 播放
 ```
 
 ---
@@ -407,6 +472,11 @@ cargo test
 
 # 发布编译
 cargo build --release
+
+# 调试 CLI 子命令（无需 GUI）：
+cargo run -- transcribe <audio.wav>          # 用文件测试 ASR
+cargo run -- inject "<文字>" --mode keyboard # 测试文字注入
+cargo run -- tts "<文字>" [out.mp3]          # 测试 TTS（写文件并播放）
 ```
 
 ---
