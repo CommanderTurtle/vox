@@ -43,8 +43,11 @@ pub fn read_selected_text() -> Result<String, InjectError> {
     #[cfg(not(target_os = "macos"))]
     let modifier = Key::Control;
 
+    // Use Unicode chars so this compiles on all platforms (enigo's Key::C /
+    // Key::V are not present on macOS).
+    let c_key = Key::Unicode('c');
     let _ = enigo.key(modifier, Direction::Press);
-    let _ = enigo.key(Key::C, Direction::Click);
+    let _ = enigo.key(c_key, Direction::Click);
     let _ = enigo.key(modifier, Direction::Release);
 
     // Wait for clipboard to update — retry up to 10 times

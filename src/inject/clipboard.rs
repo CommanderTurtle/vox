@@ -43,8 +43,11 @@ pub fn inject_clipboard(text: &str) -> Result<(), InjectError> {
     #[cfg(not(target_os = "macos"))]
     let modifier = Key::Control;
 
+    // Use Unicode chars so this compiles on all platforms (enigo's Key::V /
+    // Key::C are not present on macOS).
+    let v_key = Key::Unicode('v');
     let _ = enigo.key(modifier, Direction::Press);
-    let _ = enigo.key(Key::V, Direction::Click);
+    let _ = enigo.key(v_key, Direction::Click);
     let _ = enigo.key(modifier, Direction::Release);
 
     // Wait for paste to complete, then restore the original clipboard.
