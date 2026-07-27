@@ -58,3 +58,35 @@ pub fn play_bytes_async(data: Vec<u8>, fmt: AudioFormat) {
         }
     });
 }
+
+/// Wrap raw little-endian i16 mono PCM bytes in a WAV container.
+///
+/// Shared by TTS engines that receive raw PCM from cloud APIs (Mimo, Doubao).
+/// `sample_rate` is the PCM's sample rate (e.g. 24000 for Doubao, 24000 for Mimo).
+pub(crate) fn pcm_to_wav(pcm_data: &[u8], sample_rate: u32) -> Vec<u8> {
+    use hound::{SampleFormat, WavSpec, WavWriter};
+    use std::io::Cursor;
+
+    // PCM data is i16 samples (2 bytes each), little-endian.
+    let sample_count = pcm_data.len() / 2;
+    let spec = WavSpec {
+        channels: 1,
+        sample_rate,
+        bits_per_sample: 16,
+        sample_format: SampleFormat::Int,
+    };
+
+    let mut buf = Vec::new();
+    {
+        let mut writer = WavWriter::new(Cursor::new(&mut buf), spec).unwrap();
+        for i in 0..sample_count {
+            let offset = i * 2;
+            if offset + 1 < pcm_data.len() {
+                let sample = i16::from_le_bytes([pcm_data[offset], pcm_data[offset + 1]]);
+                writer.write_sample(sample).unwrap();
+            }
+        }
+        writer.finalize().unwrap();
+    }
+    buf
+}

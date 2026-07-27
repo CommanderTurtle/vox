@@ -700,6 +700,35 @@ fn build_asr_manager(config_mgr: &ConfigManager) -> AsrManager {
         }
     }
 
+    // Doubao streaming ASR 2.0 - registered when an API key is configured.
+    // Shares the key with the Doubao TTS engine. When registered, it becomes
+    // the default primary engine (unless the user explicitly chose another).
+    let doubao_asr_registered: bool;
+    {
+        let cfg = config_mgr.read();
+        let doubao_cfg = &cfg.asr.doubao;
+        if !doubao_cfg.api_key.is_empty() {
+            log::info!("Registering Doubao ASR engine (volc.seedasr.sauc.duration)");
+            asr_mgr.register(Box::new(
+                asr::doubao_asr::DoubaoAsrEngine::new(&doubao_cfg.api_key),
+            ));
+            doubao_asr_registered = true;
+        } else {
+            log::info!("Doubao ASR engine skipped: no api_key configured");
+            doubao_asr_registered = false;
+        }
+    }
+    // Auto-select doubao-asr as primary when it's registered AND the user
+    // hasn't explicitly chosen another engine (i.e. primary is still the
+    // factory default "whisper-cpp").
+    if doubao_asr_registered {
+        let primary = asr_mgr.active_engine();
+        if primary == "whisper-cpp" {
+            log::info!("Auto-switching ASR primary to doubao-asr");
+            let _ = asr_mgr.set_active("doubao-asr");
+        }
+    }
+
     asr_mgr
 }
 
@@ -733,6 +762,45 @@ fn build_tts_manager(config_mgr: &ConfigManager) -> TtsManager {
             log::info!("Registering Mimo TTS engine: {} at {}", tts_cfg.model, mimo_cfg.base_url);
             let engine = MimoTtsEngine::new(&mimo_cfg.base_url, &mimo_cfg.api_key, &tts_cfg.model);
             tts_mgr.register(Box::new(engine));
+        }
+    }
+
+    // Doubao TTS 2.0 (seed-tts-2.0) - registered when the shared Doubao API
+    // key is configured. When registered, it becomes the default primary TTS
+    // engine (unless the user explicitly chose another).
+    let doubao_tts_registered: bool;
+    {
+        let cfg = config_mgr.read();
+        // The API key lives on asr.doubao and is shared with the TTS engine.
+        let api_key = &cfg.asr.doubao.api_key;
+        if !api_key.is_empty() {
+            let tts_cfg = &cfg.tts.doubao;
+            log::info!(
+                "Registering Doubao TTS engine (seed-tts-2.0, speaker={})",
+                tts_cfg.speaker
+            );
+            let engine = tts::doubao_tts::DoubaoTtsEngine::new(
+                api_key,
+                &tts_cfg.speaker,
+                tts_cfg.speech_rate,
+                tts_cfg.loudness_rate,
+                tts_cfg.sample_rate,
+            );
+            tts_mgr.register(Box::new(engine));
+            doubao_tts_registered = true;
+        } else {
+            log::info!("Doubao TTS engine skipped: no api_key configured");
+            doubao_tts_registered = false;
+        }
+    }
+    // Auto-select doubao-tts as primary when it's registered AND the user
+    // hasn't explicitly chosen another engine (i.e. primary is still the
+    // factory default "edge-tts").
+    if doubao_tts_registered {
+        let primary = tts_mgr.active_engine();
+        if primary == "edge-tts" {
+            log::info!("Auto-switching TTS primary to doubao-tts");
+            let _ = tts_mgr.set_active("doubao-tts");
         }
     }
 

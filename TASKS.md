@@ -106,6 +106,9 @@ cargo test           ✅ 18/18 通过
 cargo run            ✅ 托盘正常启动
 vox transcribe x.wav ✅ 本地 whisper.cpp ASR 端到端通过
 vox tts "..."        ✅ Edge TTS 合成 MP3 + rodio 播放通过
+vox tts "..."        ✅ 豆包 TTS (seed-tts-2.0) 合成 PCM->WAV + 播放通过
+vox transcribe ...   ⚠️ 豆包 ASR 协议链路通，需豆包语音控制台专用 key（Ark key 返回 401）
+bash scripts/package.sh ✅ 打包 dist/vox-v0.1.2-windows-x86_64.zip 通过
 ```
 
 ---
@@ -150,4 +153,4 @@ vox tts "..."        ✅ Edge TTS 合成 MP3 + rodio 播放通过
 - 托盘菜单加 `Record Mode` 子菜单 (CheckMenuItem)；设置窗口加下拉；实时生效
 - `package.sh` 重写（跨平台 zip/tar.gz）；`.github/workflows/release.yml` 三平台构建 + Release
 
-**验收:** 待测试通过后打包上传
+**验收:** ✅ `cargo build --release` + `cargo test` 18/18 + `cargo clippy` 零警告通过；`bash scripts/package.sh` 本地打包验证通过，产物 `dist/vox-v0.1.2-windows-x86_64.zip` 含 `vox.exe` + `README.md` + `LICENSE` + `config-example/config.toml`。跨平台 GitHub Actions release workflow 就绪，待推送 tag 触发三平台构建。

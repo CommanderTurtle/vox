@@ -162,6 +162,12 @@ base_url = "https://token-plan-cn.xiaomimimo.com/v1"
 api_key = ""
 model = "mimo-v2.5-asr"
 
+[asr.doubao]
+# Volcano Engine Doubao ASR 2.0 (volc.seedasr.sauc.duration).
+# When set, doubao-asr registers and becomes the default ASR engine.
+# Key MUST be from the Doubao Speech console (not Ark).
+api_key = ""
+
 [inject]
 mode = "keyboard"
 
@@ -179,6 +185,13 @@ pitch = "+0Hz"
 model = "mimo-v2.5-tts"
 voice = "default"
 speed = 1.0
+
+[tts.doubao]
+# Doubao TTS 2.0 (seed-tts-2.0). Shares api_key with [asr.doubao].
+speaker = "zh_female_vv_uranus_bigtts"
+speech_rate = 0      # [-50, 100]
+loudness_rate = 0    # [-50, 100]
+sample_rate = 24000
 ```
 
 ---
@@ -189,18 +202,20 @@ speed = 1.0
 
 | Engine                                      | Type                            | Status                                               |
 | ------------------------------------------- | ------------------------------- | ---------------------------------------------------- |
-| **whisper.cpp** (`whisper-cpp`)     | Local (HTTP server)             | ✅ Default — no key, no FFI                         |
+| **whisper.cpp** (`whisper-cpp`)     | Local (HTTP server)             | ✅ Default - no key, no FFI                         |
 | **OpenAI-compatible** (`openai`)    | Cloud / Local (REST, multipart) | ✅`base_url` configurable for localhost            |
 | **Mimo ASR** (`mimo`)               | Cloud (multimodal chat)         | ✅ Needs API key                                     |
 | **Aliyun ASR** (`aliyun`)           | Cloud (一句话识别)              | ✅ Needs appkey + token                              |
+| **Doubao ASR** (`doubao-asr`)       | Cloud (WebSocket, `volc.seedasr.sauc.duration`) | ✅ Auto-default when key set; needs Doubao Speech key |
 | **Whisper Local** (`whisper-local`) | Local (whisper-rs FFI)          | ⚠️ Requires`--features whisper-local` + libclang |
 
 ### TTS
 
 | Engine                            | Type                 | Status                                  |
 | --------------------------------- | -------------------- | --------------------------------------- |
-| **Edge TTS** (`edge-tts`) | Cloud (free, no key) | ✅ Default — Microsoft Edge Read Aloud |
+| **Edge TTS** (`edge-tts`) | Cloud (free, no key) | ✅ Default - Microsoft Edge Read Aloud |
 | **Mimo TTS** (`mimo-tts`) | Cloud (neural TTS)   | ✅ Needs API key                        |
+| **Doubao TTS** (`doubao-tts`) | Cloud (`seed-tts-2.0`, HTTP streaming) | ✅ Auto-default when key set; needs Doubao Speech key |
 
 ---
 
@@ -404,6 +419,12 @@ base_url = "https://token-plan-cn.xiaomimimo.com/v1"
 api_key = ""
 model = "mimo-v2.5-asr"
 
+[asr.doubao]
+# 火山引擎豆包 ASR 2.0（volc.seedasr.sauc.duration）。
+# 配置后 doubao-asr 自动注册并设为默认 ASR 引擎。
+# Key 必须来自「豆包语音」控制台，不能用 Ark 控制台的 Key。
+api_key = ""
+
 [inject]
 mode = "keyboard"
 
@@ -421,6 +442,13 @@ pitch = "+0Hz"
 model = "mimo-v2.5-tts"
 voice = "default"
 speed = 1.0
+
+[tts.doubao]
+# 豆包 TTS 2.0（seed-tts-2.0）。与 [asr.doubao] 共用 api_key。
+speaker = "zh_female_vv_uranus_bigtts"
+speech_rate = 0      # [-50, 100]
+loudness_rate = 0    # [-50, 100]
+sample_rate = 24000
 ```
 
 ---
@@ -431,18 +459,20 @@ speed = 1.0
 
 | 引擎                                       | 类型                        | 状态                                           |
 | ------------------------------------------ | --------------------------- | ---------------------------------------------- |
-| **whisper.cpp** (`whisper-cpp`)    | 本地（HTTP 服务）           | ✅ 默认 — 免密钥、无 FFI                      |
+| **whisper.cpp** (`whisper-cpp`)    | 本地（HTTP 服务）           | ✅ 默认 - 免密钥、无 FFI                      |
 | **OpenAI 兼容** (`openai`)         | 云端/本地（REST multipart） | ✅`base_url` 可指向 localhost                |
 | **Mimo ASR** (`mimo`)              | 云端（多模态对话）          | ✅ 需 API Key                                  |
 | **阿里云 ASR** (`aliyun`)          | 云端（一句话识别）          | ✅ 需 appkey + token                           |
+| **豆包 ASR** (`doubao-asr`)        | 云端（WebSocket，`volc.seedasr.sauc.duration`） | ✅ 配 Key 后自动设为默认；需豆包语音控制台 Key |
 | **Whisper 本地** (`whisper-local`) | 本地（whisper-rs FFI）      | ⚠️ 需`--features whisper-local` + libclang |
 
 ### TTS
 
 | 引擎                              | 类型                 | 状态                      |
 | --------------------------------- | -------------------- | ------------------------- |
-| **Edge TTS** (`edge-tts`) | 云端（免费、免密钥） | ✅ 默认 — 微软 Edge 朗读 |
+| **Edge TTS** (`edge-tts`) | 云端（免费、免密钥） | ✅ 默认 - 微软 Edge 朗读 |
 | **Mimo TTS** (`mimo-tts`) | 云端（神经 TTS）     | ✅ 需 API Key             |
+| **豆包 TTS** (`doubao-tts`) | 云端（`seed-tts-2.0`，HTTP 流式） | ✅ 配 Key 后自动设为默认；需豆包语音控制台 Key |
 
 ---
 

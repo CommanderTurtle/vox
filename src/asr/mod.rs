@@ -10,6 +10,7 @@ pub mod whisper_cpp;
 pub mod mimo_asr;
 pub mod openai_asr;
 pub mod aliyun_asr;
+pub mod doubao_asr;
 
 use async_trait::async_trait;
 

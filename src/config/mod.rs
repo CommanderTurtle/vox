@@ -48,6 +48,8 @@ pub struct AsrConfig {
     pub aliyun: AliyunConfig,
     #[serde(default)]
     pub openai: OpenaiConfig,
+    #[serde(default)]
+    pub doubao: DoubaoConfig,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -124,6 +126,54 @@ impl Default for OpenaiConfig {
     }
 }
 
+/// Volcano Engine Doubao voice models config (shared by ASR + TTS).
+///
+/// The `api_key` is shared between the ASR and TTS engines; it must be issued
+/// from the **Doubao Speech console** (not the Ark console - Ark keys return
+/// HTTP 401 against the speech endpoints). When non-empty, both engines
+/// register and become the default primary engine.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct DoubaoConfig {
+    /// Doubao Speech API key (shared by ASR + TTS). Empty = engines skipped.
+    #[serde(default)]
+    pub api_key: String,
+}
+
+/// Doubao TTS (seed-tts-2.0) tuning parameters.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct DoubaoTtsConfig {
+    /// Speaker ID, e.g. `zh_female_vv_uranus_bigtts`.
+    #[serde(default = "default_doubao_speaker")]
+    pub speaker: String,
+    /// Speech rate, [-50, 100]; 0 = normal, 100 = 2x, -50 = 0.5x.
+    #[serde(default)]
+    pub speech_rate: i32,
+    /// Loudness rate, [-50, 100]; 0 = normal.
+    #[serde(default)]
+    pub loudness_rate: i32,
+    /// PCM sample rate, default 24000.
+    #[serde(default = "default_doubao_sample_rate")]
+    pub sample_rate: u32,
+}
+
+fn default_doubao_speaker() -> String {
+    "zh_female_vv_uranus_bigtts".to_string()
+}
+fn default_doubao_sample_rate() -> u32 {
+    24000
+}
+
+impl Default for DoubaoTtsConfig {
+    fn default() -> Self {
+        Self {
+            speaker: default_doubao_speaker(),
+            speech_rate: 0,
+            loudness_rate: 0,
+            sample_rate: default_doubao_sample_rate(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct TtsConfig {
     pub primary_engine: String,
@@ -133,6 +183,8 @@ pub struct TtsConfig {
     pub mimo: MimoTtsConfig,
     #[serde(default)]
     pub edge: EdgeTtsConfig,
+    #[serde(default)]
+    pub doubao: DoubaoTtsConfig,
 }
 
 impl Default for TtsConfig {
@@ -142,6 +194,7 @@ impl Default for TtsConfig {
             input_mode: "selection".to_string(),
             mimo: MimoTtsConfig::default(),
             edge: EdgeTtsConfig::default(),
+            doubao: DoubaoTtsConfig::default(),
         }
     }
 }

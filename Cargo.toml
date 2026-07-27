@@ -25,7 +25,7 @@ enigo = "0.6"
 arboard = "3"
 
 # HTTP client (for cloud ASR APIs)
-reqwest = { version = "0.12", features = ["json", "multipart"] }
+reqwest = { version = "0.12", features = ["json", "multipart", "stream"] }
 
 # WebSocket client (for Microsoft Edge TTS, no API key required)
 tokio-tungstenite = { version = "0.23", features = ["rustls-tls-native-roots"] }
@@ -51,6 +51,11 @@ thiserror = "2"
 
 # Base64 encoding (for Mimo ASR data URL)
 base64 = "0.22"
+
+# Gzip compression (for Doubao ASR binary-frame payloads)
+flate2 = "1"
+# UUID v4 (for Doubao X-Api-Request-Id)
+uuid = { version = "1", features = ["v4"] }
 
 # Logging
 log = "0.4"

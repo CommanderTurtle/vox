@@ -37,6 +37,12 @@ base_url = "https://api.openai.com/v1"
 api_key = ""
 model = "whisper-1"
 
+[asr.doubao]
+# Volcano Engine Doubao streaming ASR 2.0 (volc.seedasr.sauc.duration).
+# When api_key is set, doubao-asr registers and becomes the default ASR engine.
+# The key MUST be issued from the Doubao Speech console, not the Ark console.
+api_key = ""
+
 [inject]
 mode = "keyboard"
 
@@ -55,6 +61,14 @@ pitch = "+0Hz"
 model = "mimo-v2.5-tts"
 voice = "default"
 speed = 1.0
+
+[tts.doubao]
+# Volcano Engine Doubao TTS 2.0 (seed-tts-2.0). Shares api_key with [asr.doubao].
+# When the key is set, doubao-tts registers and becomes the default TTS engine.
+speaker = "zh_female_vv_uranus_bigtts"
+speech_rate = 0      # [-50, 100]; 0 = normal, 100 = 2x, -50 = 0.5x
+loudness_rate = 0    # [-50, 100]; 0 = normal
+sample_rate = 24000  # PCM sample rate
 
 [general]
 autostart = true

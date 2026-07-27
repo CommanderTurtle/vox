@@ -115,6 +115,7 @@ impl SettingsApp {
                     "mimo",
                     "aliyun",
                     "whisper-local",
+                    "doubao-asr",
                 ] {
                     ui.selectable_value(
                         &mut self.config.asr.primary_engine,
@@ -176,6 +177,22 @@ impl SettingsApp {
         ui.horizontal(|ui| {
             ui.label("Token:  ");
             ui.add(egui::TextEdit::singleline(&mut self.config.asr.aliyun.token).password(true));
+        });
+        ui.add_space(6.0);
+
+        // Doubao (Volcano Engine) - shared API key for ASR + TTS
+        ui.label(egui::RichText::new("Doubao ASR / TTS (shared key)").strong());
+        ui.horizontal(|ui| {
+            ui.label("API Key:");
+            ui.add(
+                egui::TextEdit::singleline(&mut self.config.asr.doubao.api_key).password(true),
+            );
+        });
+        ui.horizontal_wrapped(|ui| {
+            ui.label(
+                egui::RichText::new("⚠ Key must be from the Doubao Speech console, not Ark.")
+                    .small(),
+            );
         });
         ui.add_space(12.0);
     }
@@ -241,6 +258,11 @@ impl SettingsApp {
                     "mimo-tts".to_string(),
                     "mimo-tts",
                 );
+                ui.selectable_value(
+                    &mut self.config.tts.primary_engine,
+                    "doubao-tts".to_string(),
+                    "doubao-tts",
+                );
             });
         egui::ComboBox::from_label("Input")
             .selected_text(&self.config.tts.input_mode)
@@ -275,6 +297,30 @@ impl SettingsApp {
         ui.horizontal(|ui| {
             ui.label("Pitch: ");
             ui.add(egui::TextEdit::singleline(&mut self.config.tts.edge.pitch));
+        });
+        ui.add_space(6.0);
+
+        // Doubao TTS (seed-tts-2.0). API key is shared with [asr.doubao].
+        ui.label(egui::RichText::new("Doubao TTS (shares ASR key)").strong());
+        ui.horizontal(|ui| {
+            ui.label("Speaker:     ");
+            ui.add(egui::TextEdit::singleline(&mut self.config.tts.doubao.speaker));
+        });
+        ui.horizontal(|ui| {
+            ui.label("Speech Rate:");
+            ui.add(egui::DragValue::new(&mut self.config.tts.doubao.speech_rate).range(-50..=100));
+            ui.label("[-50..100]");
+        });
+        ui.horizontal(|ui| {
+            ui.label("Loudness:    ");
+            ui.add(egui::DragValue::new(&mut self.config.tts.doubao.loudness_rate).range(-50..=100));
+            ui.label("[-50..100]");
+        });
+        ui.horizontal(|ui| {
+            ui.label("Sample Rate:");
+            let mut sr = self.config.tts.doubao.sample_rate as i32;
+            ui.add(egui::DragValue::new(&mut sr).range(8000..=48000));
+            self.config.tts.doubao.sample_rate = sr.max(1) as u32;
         });
         ui.add_space(12.0);
     }

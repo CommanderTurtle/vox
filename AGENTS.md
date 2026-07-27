@@ -7,7 +7,8 @@ Voice I/O companion for CLI AI agents — system-tray app providing global ASR (
 - **Stack**: Rust 2021 edition, tokio async, crossbeam channels, tray-icon, cpal (audio), rdev (hotkeys), egui (settings UI)
 - **Entry**: `src/main.rs` — initializes config, engines, tray, hotkeys, then enters crossbeam::select! event loop
 - **Config**: TOML at platform config dir (`com.vox/vox/`); `defaults.toml` embedded via `include_str!`
-- **Default engines**: local ASR (`whisper-cpp` HTTP server, with `openai`-compatible fallback) + free **Edge TTS** (no API key). Mimo/Aliyun cloud engines register only when keys are configured.
+- **Default engines**: local ASR (`whisper-cpp` HTTP server, with `openai`-compatible fallback) + free **Edge TTS** (no API key). Mimo/Aliyun cloud engines register only when keys are configured. **Doubao** (Volcano Engine) ASR/TTS register and become the default when `asr.doubao.api_key` is set; the key is shared between ASR + TTS and must come from the Doubao Speech console (not Ark).
+- **Doubao (Volcano Engine)**: set `[asr.doubao].api_key` (Doubao Speech console key, shared with TTS) to auto-register `doubao-asr` (`volc.seedasr.sauc.duration`, WebSocket `bigmodel_nostream`) + `doubao-tts` (`seed-tts-2.0`, HTTP NDJSON streaming) and make them the default primary engines. TTS requests PCM and is wrapped to WAV via the shared `playback::pcm_to_wav`.
 
 ## Commands
 
@@ -33,6 +34,7 @@ main.rs (event loop: crossbeam::select! tray events × hotkey events)
 │                  mimo_asr.rs (Mimo chat completions API, input_audio data URL)
 │                  openai_asr.rs (OpenAI-compatible /audio/transcriptions, multipart; base_url configurable for localhost)
 │                  aliyun_asr.rs (nls-gateway REST, raw PCM body)
+│                  doubao_asr.rs (Volcano Doubao ASR 2.0, WebSocket binary-frame protocol, bigmodel_nostream endpoint)
 │                  whisper_local.rs (whisper.cpp FFI, feature-gated)
 ├── audio/       — capture.rs (cpal microphone, 16kHz mono i16 PCM, bg thread)
 │                  utils.rs (WAV encode, RMS level, duration helpers)
@@ -41,8 +43,9 @@ main.rs (event loop: crossbeam::select! tray events × hotkey events)
 │                  clipboard.rs (arboard + enigo Ctrl+V, save/restore)
 │                  text_reader.rs (read selected text via Ctrl+C simulation)
 ├── tts/         — mod.rs (TtsEngine trait + TtsManager + TtsInputMode enum)
-│                  edge_tts.rs (free Microsoft Edge TTS over WebSocket, no API key; requests WAV)
+│                  edge_tts.rs (free Microsoft Edge TTS over WebSocket, no API key; requests MP3, decoded in-process by rodio)
 │                  mimo_tts.rs (Mimo chat completions, base64 PCM → WAV)
+│                  doubao_tts.rs (Volcano Doubao TTS 2.0, HTTP NDJSON streaming; requests PCM → WAV)
 │                  playback.rs (temp WAV → system player: powershell/afplay/aplay)
 ├── config/      — mod.rs (ConfigManager: load/save TOML, RwLock, serde(default) for backwards compat)
 ├── tray/        — mod.rs (dedicated thread with Windows message pump, tray-icon + menu)

@@ -118,37 +118,7 @@ impl TtsEngine for MimoTtsEngine {
 
         // The returned data is raw PCM (probably 16-bit 24kHz mono).
         // Wrap it in a WAV header so playback systems can use it.
-        let wav_bytes = pcm_to_wav(&pcm_bytes, 24000);
+        let wav_bytes = crate::tts::playback::pcm_to_wav(&pcm_bytes, 24000);
         Ok(wav_bytes)
     }
-}
-
-/// Wrap raw PCM bytes in a WAV container.
-fn pcm_to_wav(pcm_data: &[u8], sample_rate: u32) -> Vec<u8> {
-    use hound::{WavSpec, WavWriter, SampleFormat};
-    use std::io::Cursor;
-
-    // PCM data should be i16 samples (2 bytes each)
-    let sample_count = pcm_data.len() / 2;
-    let spec = WavSpec {
-        channels: 1,
-        sample_rate,
-        bits_per_sample: 16,
-        sample_format: SampleFormat::Int,
-    };
-
-    let mut buf = Vec::new();
-    {
-        let mut writer = WavWriter::new(Cursor::new(&mut buf), spec).unwrap();
-        // Read i16 samples from raw bytes (little-endian)
-        for i in 0..sample_count {
-            let offset = i * 2;
-            if offset + 1 < pcm_data.len() {
-                let sample = i16::from_le_bytes([pcm_data[offset], pcm_data[offset + 1]]);
-                writer.write_sample(sample).unwrap();
-            }
-        }
-        writer.finalize().unwrap();
-    }
-    buf
 }
