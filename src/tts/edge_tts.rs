@@ -10,8 +10,9 @@
 //! 4. Read frames until `Path:turn.end`. Binary frames carry audio data
 //!    prefixed by a 2-byte big-endian header length.
 //!
-//! We request `riff-24khz-16bit-mono-pcm` (i.e. WAV) so the existing
-//! WAV playback path works unchanged — no MP3 decoder needed.
+//! We request `audio-24khz-48kbitrate-mono-mp3` (the reference client's
+//! default - the Edge service dropped several `riff-*` PCM formats). The
+//! MP3 bytes are decoded in-process by `rodio` in the playback layer.
 
 use async_trait::async_trait;
 use futures_util::{SinkExt, StreamExt};
@@ -29,7 +30,7 @@ const SEC_MS_GEC_VERSION: &str = "1-143.0.3650.75";
 ///
 /// The Edge service dropped support for several `riff-*` PCM formats, so we
 /// request `audio-24khz-48kbitrate-mono-mp3` (the reference client's default)
-/// and let the playback layer handle MP3 decoding via the OS player.
+/// and decode the MP3 in-process via `rodio` in the playback layer.
 const AUDIO_OUTPUT_FORMAT: &str = "audio-24khz-48kbitrate-mono-mp3";
 
 /// Microsoft Edge TTS engine (free, no API key).
