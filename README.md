@@ -170,8 +170,8 @@ model = "mimo-v2.5-asr"
 
 [asr.doubao]
 # Volcano Engine Doubao ASR 2.0 (volc.seedasr.sauc.duration).
-# When set, doubao-asr registers and becomes the default ASR engine.
-# Key MUST be from the Doubao Speech console (not Ark).
+# Uses the Agent Plan endpoint (/api/v3/plan/sauc/...). When set, doubao-asr
+# registers and becomes the default ASR engine.
 api_key = ""
 
 [inject]
@@ -432,8 +432,8 @@ model = "mimo-v2.5-asr"
 
 [asr.doubao]
 # 火山引擎豆包 ASR 2.0（volc.seedasr.sauc.duration）。
-# 配置后 doubao-asr 自动注册并设为默认 ASR 引擎。
-# Key 必须来自「豆包语音」控制台，不能用 Ark 控制台的 Key。
+# 使用 Agent Plan 端点（/api/v3/plan/sauc/...）。配置后 doubao-asr
+# 自动注册并设为默认 ASR 引擎。
 api_key = ""
 
 [inject]
@@ -474,7 +474,7 @@ sample_rate = 24000
 | **OpenAI 兼容** (`openai`)         | 云端/本地（REST multipart） | ✅`base_url` 可指向 localhost                |
 | **Mimo ASR** (`mimo`)              | 云端（多模态对话）          | ✅ 需 API Key                                  |
 | **阿里云 ASR** (`aliyun`)          | 云端（一句话识别）          | ✅ 需 appkey + token                           |
-| **豆包 ASR** (`doubao-asr`)        | 云端（WebSocket，`volc.seedasr.sauc.duration`） | ✅ 配 Key 后自动设为默认；需豆包语音控制台 Key |
+| **豆包 ASR** (`doubao-asr`)        | 云端（WebSocket，`volc.seedasr.sauc.duration`） | ✅ 配 Key 后自动设为默认；需 Agent Plan key |
 | **Whisper 本地** (`whisper-local`) | 本地（whisper-rs FFI）      | ⚠️ 需`--features whisper-local` + libclang |
 
 ### TTS
@@ -483,7 +483,7 @@ sample_rate = 24000
 | --------------------------------- | -------------------- | ------------------------- |
 | **Edge TTS** (`edge-tts`) | 云端（免费、免密钥） | ✅ 默认 - 微软 Edge 朗读 |
 | **Mimo TTS** (`mimo-tts`) | 云端（神经 TTS）     | ✅ 需 API Key             |
-| **豆包 TTS** (`doubao-tts`) | 云端（`seed-tts-2.0`，HTTP 流式） | ✅ 配 Key 后自动设为默认；需豆包语音控制台 Key |
+| **豆包 TTS** (`doubao-tts`) | 云端（`seed-tts-2.0`，HTTP 流式） | ✅ 配 Key 后自动设为默认；需 Agent Plan key |
 
 ---
 

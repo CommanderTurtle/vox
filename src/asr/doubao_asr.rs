@@ -5,8 +5,9 @@
 //! vox's record-then-transcribe model (no partial-result handling needed).
 //!
 //! Auth is via `X-Api-Key` + `X-Api-Resource-Id` handshake headers (NOT
-//! `Authorization: Bearer`); the key is shared with the Doubao TTS engine and
-//! must come from the Doubao Speech console.
+//! `Authorization: Bearer`); the key is shared with the Doubao TTS engine.
+//! Uses the Agent Plan endpoint (`/api/v3/plan/sauc/...`) with the Agent Plan
+//! subscription key.
 //!
 //! ## Binary-frame protocol
 //!
@@ -128,8 +129,8 @@ impl AsrEngine for DoubaoAsrEngine {
                     engine: "doubao-asr".into(),
                     message: format!(
                         "WebSocket handshake failed: {}. \
-                         Hint: the key must be issued from the Doubao Speech console, \
-                         not the Ark console (Ark keys return 401 here).",
+                         Hint: verify the Agent Plan subscription key in [asr.doubao].api_key \
+                         and that the plan covers the ASR resource.",
                         detail
                     ),
                 });

@@ -199,7 +199,7 @@ impl SettingsApp {
         });
         ui.horizontal_wrapped(|ui| {
             ui.label(
-                egui::RichText::new("⚠ Key must be from the Doubao Speech console, not Ark.")
+                egui::RichText::new("Agent Plan subscription key. Shared by ASR + TTS.")
                     .small(),
             );
         });

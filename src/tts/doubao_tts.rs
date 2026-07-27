@@ -1,8 +1,9 @@
 //! Volcano Engine **Doubao TTS 2.0** (`seed-tts-2.0`) engine.
 //!
 //! Uses the HTTP unidirectional streaming endpoint. Auth is via the
-//! `X-Api-Key` + `X-Api-Resource-Id` headers (NOT `Authorization: Bearer`) -
-//! the key must be issued from the Doubao Speech console, not the Ark console.
+//! `X-Api-Key` + `X-Api-Resource-Id` headers (NOT `Authorization: Bearer`).
+//! Uses the Agent Plan endpoint (`/api/v3/plan/tts/...`) with the Agent Plan
+//! subscription key.
 //!
 //! Protocol (cross-verified against the official `veadk-go` SDK and several
 //! production clients):

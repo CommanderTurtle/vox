@@ -7,8 +7,8 @@ Voice I/O companion for CLI AI agents — system-tray app providing global ASR (
 - **Stack**: Rust 2021 edition, tokio async, crossbeam channels, tray-icon, cpal (audio), rdev (hotkeys), egui (settings UI)
 - **Entry**: `src/main.rs` — initializes config, engines, tray, hotkeys, then enters crossbeam::select! event loop
 - **Config**: TOML at platform config dir (`com.vox/vox/`); `defaults.toml` embedded via `include_str!`
-- **Default engines**: local ASR (`whisper-cpp` HTTP server, with `openai`-compatible fallback) + free **Edge TTS** (no API key). Mimo/Aliyun cloud engines register only when keys are configured. **Doubao** (Volcano Engine) ASR/TTS register and become the default when `asr.doubao.api_key` is set; the key is shared between ASR + TTS and must come from the Doubao Speech console (not Ark).
-- **Doubao (Volcano Engine)**: set `[asr.doubao].api_key` (Doubao Speech console key, shared with TTS) to auto-register `doubao-asr` (`volc.seedasr.sauc.duration`, WebSocket `bigmodel_nostream`) + `doubao-tts` (`seed-tts-2.0`, HTTP NDJSON streaming) and make them the default primary engines. TTS requests PCM and is wrapped to WAV via the shared `playback::pcm_to_wav`.
+- **Default engines**: local ASR (`whisper-cpp` HTTP server, with `openai`-compatible fallback) + free **Edge TTS** (no API key). Mimo/Aliyun cloud engines register only when keys are configured. **Doubao** (Volcano Engine) ASR/TTS register and become the default when `asr.doubao.api_key` is set; the key is the Agent Plan subscription key, shared between ASR + TTS, used against the `/api/v3/plan/...` endpoints.
+- **Doubao (Volcano Engine)**: set `[asr.doubao].api_key` (Agent Plan subscription key, shared with TTS) to auto-register `doubao-asr` (`volc.seedasr.sauc.duration`, WebSocket `bigmodel_nostream` on `/api/v3/plan/sauc/`) + `doubao-tts` (`seed-tts-2.0`, HTTP NDJSON streaming on `/api/v3/plan/tts/`) and make them the default primary engines. TTS requests PCM and is wrapped to WAV via the shared `playback::pcm_to_wav`.
 
 ## Commands
 

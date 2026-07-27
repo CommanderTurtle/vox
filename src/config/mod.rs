@@ -128,13 +128,12 @@ impl Default for OpenaiConfig {
 
 /// Volcano Engine Doubao voice models config (shared by ASR + TTS).
 ///
-/// The `api_key` is shared between the ASR and TTS engines; it must be issued
-/// from the **Doubao Speech console** (not the Ark console - Ark keys return
-/// HTTP 401 against the speech endpoints). When non-empty, both engines
-/// register and become the default primary engine.
+/// The `api_key` is shared between the ASR and TTS engines; it is the Agent
+/// Plan subscription key, used against the `/api/v3/plan/...` endpoints.
+/// When non-empty, both engines register and become the default primary engine.
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct DoubaoConfig {
-    /// Doubao Speech API key (shared by ASR + TTS). Empty = engines skipped.
+    /// Agent Plan subscription API key (shared by ASR + TTS). Empty = engines skipped.
     #[serde(default)]
     pub api_key: String,
 }

@@ -39,8 +39,8 @@ model = "whisper-1"
 
 [asr.doubao]
 # Volcano Engine Doubao streaming ASR 2.0 (volc.seedasr.sauc.duration).
-# When api_key is set, doubao-asr registers and becomes the default ASR engine.
-# The key MUST be issued from the Doubao Speech console, not the Ark console.
+# Uses the Agent Plan endpoint (/api/v3/plan/sauc/...). When api_key is set,
+# doubao-asr registers and becomes the default ASR engine.
 api_key = ""
 
 [inject]
