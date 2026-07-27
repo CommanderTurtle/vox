@@ -48,7 +48,8 @@ impl TtsEngine for MimoTtsEngine {
             ]
         });
 
-        let response = self.client
+        let response = self
+            .client
             .post(&url)
             .header("Authorization", format!("Bearer {}", self.api_key))
             .json(&payload)
@@ -68,8 +69,11 @@ impl TtsEngine for MimoTtsEngine {
         if !status.is_success() {
             return Err(TtsError::EngineError {
                 engine: "mimo-tts".into(),
-                message: format!("API returned {}: {}", status.as_u16(),
-                    body.chars().take(300).collect::<String>()),
+                message: format!(
+                    "API returned {}: {}",
+                    status.as_u16(),
+                    body.chars().take(300).collect::<String>()
+                ),
             });
         }
 
@@ -91,15 +95,18 @@ impl TtsEngine for MimoTtsEngine {
             data: String,
         }
 
-        let resp: MimoResponse = serde_json::from_str(&body).map_err(|e| {
-            TtsError::EngineError {
+        let resp: MimoResponse =
+            serde_json::from_str(&body).map_err(|e| TtsError::EngineError {
                 engine: "mimo-tts".into(),
-                message: format!("Failed to parse JSON: {} — body: {}",
-                    e, body.chars().take(200).collect::<String>()),
-            }
-        })?;
+                message: format!(
+                    "Failed to parse JSON: {} — body: {}",
+                    e,
+                    body.chars().take(200).collect::<String>()
+                ),
+            })?;
 
-        let b64_data = resp.choices
+        let b64_data = resp
+            .choices
             .first()
             .and_then(|c| c.message.audio.as_ref())
             .map(|a| &a.data)

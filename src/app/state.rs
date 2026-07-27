@@ -44,3 +44,31 @@ impl RecordMode {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_from_str() {
+        assert_eq!(RecordMode::from_str("ptt"), RecordMode::PushToTalk);
+        assert_eq!(RecordMode::from_str("toggle"), RecordMode::Toggle);
+        // Unknown values fall back to PushToTalk.
+        assert_eq!(RecordMode::from_str("unknown"), RecordMode::PushToTalk);
+        assert_eq!(RecordMode::from_str(""), RecordMode::PushToTalk);
+    }
+
+    #[test]
+    fn test_from_str_case_insensitive() {
+        assert_eq!(RecordMode::from_str("TOGGLE"), RecordMode::Toggle);
+        assert_eq!(RecordMode::from_str("Toggle"), RecordMode::Toggle);
+    }
+
+    #[test]
+    fn test_as_str_roundtrip() {
+        for mode in [RecordMode::PushToTalk, RecordMode::Toggle] {
+            let s = mode.as_str();
+            assert_eq!(RecordMode::from_str(s), mode);
+        }
+    }
+}

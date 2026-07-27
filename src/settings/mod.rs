@@ -15,10 +15,7 @@ use crate::config::Config;
 ///
 /// `initial` is the current config snapshot to edit. `save_tx` receives the
 /// edited snapshot when the user saves, so the backend can persist + apply it.
-pub fn spawn_settings_window(
-    initial: Config,
-    save_tx: crossbeam::channel::Sender<Config>,
-) {
+pub fn spawn_settings_window(initial: Config, save_tx: crossbeam::channel::Sender<Config>) {
     std::thread::spawn(move || {
         let options = eframe::NativeOptions {
             viewport: egui::ViewportBuilder::default()
@@ -32,11 +29,9 @@ pub fn spawn_settings_window(
             save_tx,
         };
 
-        if let Err(e) = eframe::run_native(
-            "vox Settings",
-            options,
-            Box::new(|_cc| Ok(Box::new(app))),
-        ) {
+        if let Err(e) =
+            eframe::run_native("vox Settings", options, Box::new(|_cc| Ok(Box::new(app))))
+        {
             log::error!("Settings window error: {}", e);
         }
     });
@@ -87,19 +82,27 @@ impl SettingsApp {
         ui.label(egui::RichText::new("Hotkeys").strong());
         ui.horizontal(|ui| {
             ui.label("Record Toggle:");
-            ui.add(egui::TextEdit::singleline(&mut self.config.hotkey.record_toggle));
+            ui.add(egui::TextEdit::singleline(
+                &mut self.config.hotkey.record_toggle,
+            ));
         });
         ui.horizontal(|ui| {
             ui.label("Switch Engine: ");
-            ui.add(egui::TextEdit::singleline(&mut self.config.hotkey.engine_switch));
+            ui.add(egui::TextEdit::singleline(
+                &mut self.config.hotkey.engine_switch,
+            ));
         });
         ui.horizontal(|ui| {
             ui.label("Switch Inject: ");
-            ui.add(egui::TextEdit::singleline(&mut self.config.hotkey.inject_mode_switch));
+            ui.add(egui::TextEdit::singleline(
+                &mut self.config.hotkey.inject_mode_switch,
+            ));
         });
         ui.horizontal(|ui| {
             ui.label("TTS Trigger:   ");
-            ui.add(egui::TextEdit::singleline(&mut self.config.hotkey.tts_trigger));
+            ui.add(egui::TextEdit::singleline(
+                &mut self.config.hotkey.tts_trigger,
+            ));
         });
         ui.add_space(12.0);
     }
@@ -130,7 +133,9 @@ impl SettingsApp {
         ui.label(egui::RichText::new("whisper.cpp (local HTTP)").strong());
         ui.horizontal(|ui| {
             ui.label("Base URL:");
-            ui.add(egui::TextEdit::singleline(&mut self.config.asr.whisper_cpp.base_url));
+            ui.add(egui::TextEdit::singleline(
+                &mut self.config.asr.whisper_cpp.base_url,
+            ));
         });
         ui.add_space(6.0);
 
@@ -138,17 +143,19 @@ impl SettingsApp {
         ui.label(egui::RichText::new("OpenAI-compatible").strong());
         ui.horizontal(|ui| {
             ui.label("Base URL:");
-            ui.add(egui::TextEdit::singleline(&mut self.config.asr.openai.base_url));
+            ui.add(egui::TextEdit::singleline(
+                &mut self.config.asr.openai.base_url,
+            ));
         });
         ui.horizontal(|ui| {
             ui.label("API Key: ");
-            ui.add(
-                egui::TextEdit::singleline(&mut self.config.asr.openai.api_key).password(true),
-            );
+            ui.add(egui::TextEdit::singleline(&mut self.config.asr.openai.api_key).password(true));
         });
         ui.horizontal(|ui| {
             ui.label("Model:   ");
-            ui.add(egui::TextEdit::singleline(&mut self.config.asr.openai.model));
+            ui.add(egui::TextEdit::singleline(
+                &mut self.config.asr.openai.model,
+            ));
         });
         ui.add_space(6.0);
 
@@ -156,7 +163,9 @@ impl SettingsApp {
         ui.label(egui::RichText::new("Mimo ASR").strong());
         ui.horizontal(|ui| {
             ui.label("Base URL:");
-            ui.add(egui::TextEdit::singleline(&mut self.config.asr.mimo.base_url));
+            ui.add(egui::TextEdit::singleline(
+                &mut self.config.asr.mimo.base_url,
+            ));
         });
         ui.horizontal(|ui| {
             ui.label("API Key: ");
@@ -172,7 +181,9 @@ impl SettingsApp {
         ui.label(egui::RichText::new("Aliyun ASR").strong());
         ui.horizontal(|ui| {
             ui.label("Appkey: ");
-            ui.add(egui::TextEdit::singleline(&mut self.config.asr.aliyun.appkey));
+            ui.add(egui::TextEdit::singleline(
+                &mut self.config.asr.aliyun.appkey,
+            ));
         });
         ui.horizontal(|ui| {
             ui.label("Token:  ");
@@ -184,9 +195,7 @@ impl SettingsApp {
         ui.label(egui::RichText::new("Doubao ASR / TTS (shared key)").strong());
         ui.horizontal(|ui| {
             ui.label("API Key:");
-            ui.add(
-                egui::TextEdit::singleline(&mut self.config.asr.doubao.api_key).password(true),
-            );
+            ui.add(egui::TextEdit::singleline(&mut self.config.asr.doubao.api_key).password(true));
         });
         ui.horizontal_wrapped(|ui| {
             ui.label(
@@ -304,7 +313,9 @@ impl SettingsApp {
         ui.label(egui::RichText::new("Doubao TTS (shares ASR key)").strong());
         ui.horizontal(|ui| {
             ui.label("Speaker:     ");
-            ui.add(egui::TextEdit::singleline(&mut self.config.tts.doubao.speaker));
+            ui.add(egui::TextEdit::singleline(
+                &mut self.config.tts.doubao.speaker,
+            ));
         });
         ui.horizontal(|ui| {
             ui.label("Speech Rate:");
@@ -313,7 +324,9 @@ impl SettingsApp {
         });
         ui.horizontal(|ui| {
             ui.label("Loudness:    ");
-            ui.add(egui::DragValue::new(&mut self.config.tts.doubao.loudness_rate).range(-50..=100));
+            ui.add(
+                egui::DragValue::new(&mut self.config.tts.doubao.loudness_rate).range(-50..=100),
+            );
             ui.label("[-50..100]");
         });
         ui.horizontal(|ui| {

@@ -9,7 +9,7 @@ use std::thread;
 use std::time::Duration;
 
 use arboard::Clipboard;
-use enigo::{Enigo, Key, Keyboard, Direction, Settings};
+use enigo::{Direction, Enigo, Key, Keyboard, Settings};
 
 use crate::inject::{ClipboardSnapshot, InjectError};
 
@@ -20,9 +20,8 @@ use crate::inject::{ClipboardSnapshot, InjectError};
 /// The previous clipboard contents (text *or* image) are snapshotted first
 /// and restored afterwards, so the user's clipboard is not destroyed.
 pub fn read_selected_text() -> Result<String, InjectError> {
-    let mut enigo = Enigo::new(&Settings::default()).map_err(|e| {
-        InjectError::Keyboard(format!("Failed to create Enigo: {:?}", e))
-    })?;
+    let mut enigo = Enigo::new(&Settings::default())
+        .map_err(|e| InjectError::Keyboard(format!("Failed to create Enigo: {:?}", e)))?;
 
     // Snapshot whatever is on the clipboard (text or image) so we can restore
     // it afterwards — this avoids destroying non-text clipboard contents.
@@ -30,9 +29,8 @@ pub fn read_selected_text() -> Result<String, InjectError> {
 
     // Clear clipboard first so we can detect if something was actually copied.
     {
-        let mut cb = Clipboard::new().map_err(|e| {
-            InjectError::Clipboard(format!("Failed to open clipboard: {}", e))
-        })?;
+        let mut cb = Clipboard::new()
+            .map_err(|e| InjectError::Clipboard(format!("Failed to open clipboard: {}", e)))?;
         cb.clear().ok();
     }
     thread::sleep(Duration::from_millis(80));
@@ -72,8 +70,7 @@ pub fn read_selected_text() -> Result<String, InjectError> {
 
 /// Read clipboard text directly (no simulation).
 pub fn read_clipboard_text() -> Result<String, InjectError> {
-    let mut cb = Clipboard::new().map_err(|e| {
-        InjectError::Clipboard(format!("Failed to open clipboard: {}", e))
-    })?;
+    let mut cb = Clipboard::new()
+        .map_err(|e| InjectError::Clipboard(format!("Failed to open clipboard: {}", e)))?;
     Ok(cb.get_text().ok().unwrap_or_default())
 }

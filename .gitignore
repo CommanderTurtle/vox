@@ -1,2 +1,20 @@
+# Build artifacts
 /target
 dist/
+
+# Logs
+*.log
+
+# IDE / editor
+.vscode/
+.idea/
+*.iml
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local config / secrets (API keys must never be committed)
+.env
+*.local.toml

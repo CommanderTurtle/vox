@@ -75,9 +75,11 @@ impl AsrEngine for AliyunAsrEngine {
         if !status.is_success() {
             return Err(AsrError::EngineError {
                 engine: "aliyun".into(),
-                message: format!("API returned {}: {}",
+                message: format!(
+                    "API returned {}: {}",
                     status.as_u16(),
-                    body.chars().take(300).collect::<String>()),
+                    body.chars().take(300).collect::<String>()
+                ),
             });
         }
 
@@ -89,16 +91,15 @@ impl AsrEngine for AliyunAsrEngine {
             message: Option<String>,
         }
 
-        let resp: AliyunAsrResponse = serde_json::from_str(&body).map_err(|e| {
-            AsrError::EngineError {
+        let resp: AliyunAsrResponse =
+            serde_json::from_str(&body).map_err(|e| AsrError::EngineError {
                 engine: "aliyun".into(),
                 message: format!(
                     "Failed to parse response JSON: {} — body: {}",
                     e,
                     body.chars().take(200).collect::<String>()
                 ),
-            }
-        })?;
+            })?;
 
         if resp.status != 20000000 {
             return Err(AsrError::EngineError {

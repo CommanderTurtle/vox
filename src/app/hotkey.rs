@@ -47,10 +47,18 @@ impl HotkeyBinding {
 
         for part in &parts {
             match part.to_lowercase().as_str() {
-                "alt" => { modifiers.insert(Key::Alt); }
-                "ctrl" | "control" => { modifiers.insert(Key::ControlLeft); }
-                "shift" => { modifiers.insert(Key::ShiftLeft); }
-                "meta" | "win" | "cmd" | "super" => { modifiers.insert(Key::MetaLeft); }
+                "alt" => {
+                    modifiers.insert(Key::Alt);
+                }
+                "ctrl" | "control" => {
+                    modifiers.insert(Key::ControlLeft);
+                }
+                "shift" => {
+                    modifiers.insert(Key::ShiftLeft);
+                }
+                "meta" | "win" | "cmd" | "super" => {
+                    modifiers.insert(Key::MetaLeft);
+                }
                 other => {
                     if let Some(key) = parse_key(other) {
                         main_key = Some(key);
@@ -172,9 +180,28 @@ pub fn start_hotkey_listener(
                 _ => {}
             }
         }) {
-            log::error!("Hotkey listener error: {:?}", e);
+            log::error!("Hotkey listener failed: {:?}. {}", e, hotkey_failure_hint(),);
         }
     });
+}
+
+/// Return a platform-specific, actionable hint for when the global hotkey
+/// listener fails to start.
+///
+/// On Linux, `rdev` needs write access to `/dev/uinput` to capture global
+/// key events; without it `listen()` fails immediately and silently. The fix
+/// is to grant the user permission on that device.
+fn hotkey_failure_hint() -> &'static str {
+    #[cfg(target_os = "linux")]
+    {
+        "On Linux this usually means /dev/uinput is not writable. \
+         Fix: `sudo usermod -aG input $USER` then log out and back in, \
+         or `sudo chmod 0660 /dev/uinput`."
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        "Global hotkeys may be blocked by accessibility/permissions settings."
+    }
 }
 
 /// Parse a single key name into an rdev Key.

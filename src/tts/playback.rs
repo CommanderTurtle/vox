@@ -4,8 +4,8 @@
 //! reliable across platforms (the previous PowerShell/afplay/aplay approach
 //! had platform-specific MP3 and message-pump issues).
 
-use std::io::Cursor;
 use rodio::{OutputStream, Sink, Source};
+use std::io::Cursor;
 
 use crate::tts::TtsError;
 
@@ -31,19 +31,16 @@ impl AudioFormat {
 pub fn play_bytes(data: &[u8], fmt: AudioFormat) -> Result<(), TtsError> {
     // OutputStream must live for the duration of playback; keep it alive
     // until the sink drains.
-    let (_stream, stream_handle) = OutputStream::try_default().map_err(|e| {
-        TtsError::Playback(format!("Failed to open audio output: {}", e))
-    })?;
+    let (_stream, stream_handle) = OutputStream::try_default()
+        .map_err(|e| TtsError::Playback(format!("Failed to open audio output: {}", e)))?;
 
     let cursor = Cursor::new(data.to_vec());
     // rodio's Decoder auto-detects WAV/MP3/etc. from the bytes.
-    let decoder = rodio::Decoder::new(cursor).map_err(|e| {
-        TtsError::Playback(format!("Audio decode failed ({:?}): {}", fmt, e))
-    })?;
+    let decoder = rodio::Decoder::new(cursor)
+        .map_err(|e| TtsError::Playback(format!("Audio decode failed ({:?}): {}", fmt, e)))?;
 
-    let sink = Sink::try_new(&stream_handle).map_err(|e| {
-        TtsError::Playback(format!("Failed to create sink: {}", e))
-    })?;
+    let sink = Sink::try_new(&stream_handle)
+        .map_err(|e| TtsError::Playback(format!("Failed to create sink: {}", e)))?;
     sink.append(decoder.convert_samples::<f32>());
     sink.sleep_until_end();
 

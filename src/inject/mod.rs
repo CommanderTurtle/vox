@@ -4,8 +4,8 @@
 //! - **Keyboard**: simulates typing each character via `enigo`
 //! - **Clipboard**: writes text to clipboard, simulates Ctrl+V, then restores
 
-pub mod keyboard;
 pub mod clipboard;
+pub mod keyboard;
 pub mod text_reader;
 
 use arboard::{Clipboard, ImageData};
@@ -39,9 +39,8 @@ pub enum ClipboardSnapshot {
 impl ClipboardSnapshot {
     /// Capture the current clipboard contents.
     pub fn capture() -> Result<Self, InjectError> {
-        let mut cb = Clipboard::new().map_err(|e| {
-            InjectError::Clipboard(format!("Failed to open clipboard: {}", e))
-        })?;
+        let mut cb = Clipboard::new()
+            .map_err(|e| InjectError::Clipboard(format!("Failed to open clipboard: {}", e)))?;
         // Prefer text; arboard returns ContentNotAvailable when there's none.
         if let Ok(text) = cb.get_text() {
             if !text.is_empty() {

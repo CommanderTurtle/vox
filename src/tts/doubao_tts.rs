@@ -207,16 +207,15 @@ impl DoubaoTtsEngine {
             message: Option<String>,
         }
 
-        let frame: ResponseFrame = serde_json::from_str(line).map_err(|e| {
-            TtsError::EngineError {
+        let frame: ResponseFrame =
+            serde_json::from_str(line).map_err(|e| TtsError::EngineError {
                 engine: "doubao-tts".into(),
                 message: format!(
                     "failed to parse NDJSON frame: {} - line: {}",
                     e,
                     line.chars().take(200).collect::<String>()
                 ),
-            }
-        })?;
+            })?;
 
         match frame.code {
             0 => match frame.data {
@@ -246,6 +245,7 @@ impl DoubaoTtsEngine {
 }
 
 /// Parsed NDJSON frame.
+#[derive(Debug)]
 enum Frame {
     /// A decoded audio chunk to append.
     Audio(Vec<u8>),
@@ -253,4 +253,61 @@ enum Frame {
     End,
     /// A frame with no payload to act on (e.g. metadata-only).
     Skip,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_frame_audio() {
+        let raw = b"hello pcm";
+        use base64::Engine;
+        let b64 = base64::engine::general_purpose::STANDARD.encode(raw);
+        let line = format!(r#"{{"code":0,"data":"{}"}}"#, b64);
+        match DoubaoTtsEngine::parse_frame(&line).unwrap() {
+            Frame::Audio(bytes) => assert_eq!(bytes, raw),
+            _ => panic!("expected Audio"),
+        }
+    }
+
+    #[test]
+    fn test_parse_frame_skip_empty_data() {
+        // code=0 but data is empty -> Skip.
+        let line = r#"{"code":0,"data":""}"#;
+        assert!(matches!(
+            DoubaoTtsEngine::parse_frame(line).unwrap(),
+            Frame::Skip
+        ));
+        // code=0, data field absent -> Skip.
+        let line = r#"{"code":0}"#;
+        assert!(matches!(
+            DoubaoTtsEngine::parse_frame(line).unwrap(),
+            Frame::Skip
+        ));
+    }
+
+    #[test]
+    fn test_parse_frame_end() {
+        let line = r#"{"code":20000000}"#;
+        assert!(matches!(
+            DoubaoTtsEngine::parse_frame(line).unwrap(),
+            Frame::End
+        ));
+    }
+
+    #[test]
+    fn test_parse_frame_error_code() {
+        let line = r#"{"code":45000010,"message":"Invalid X-Api-Key"}"#;
+        let err = DoubaoTtsEngine::parse_frame(line).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("45000010"), "msg: {}", msg);
+        assert!(msg.contains("Invalid X-Api-Key"), "msg: {}", msg);
+    }
+
+    #[test]
+    fn test_parse_frame_invalid_json() {
+        let err = DoubaoTtsEngine::parse_frame("not json").unwrap_err();
+        assert!(err.to_string().contains("failed to parse NDJSON frame"));
+    }
 }

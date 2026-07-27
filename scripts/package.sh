@@ -28,7 +28,7 @@ STAGE="dist/stage"
 rm -rf "$STAGE"
 mkdir -p "$STAGE/config-example"
 cp "$BIN" "$STAGE/"
-cp README.md "$STAGE/" 2>/dev/null || true
+cp README.md "$STAGE/"
 cp LICENSE "$STAGE/" 2>/dev/null || true
 cp src/config/defaults.toml "$STAGE/config-example/config.toml"
 

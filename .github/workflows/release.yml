@@ -52,24 +52,18 @@ jobs:
             libwayland-dev libxkbcommon-dev
 
       - name: Build
-        uses: actions-rs/cargo@v1
-        with:
-          command: build
-          args: --release --target ${{ matrix.target }}
-        env:
-          # Strip symbols + optimize for size on release
-          CARGO_PROFILE_RELEASE_LTO: "true"
-          CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "1"
+        run: cargo build --release --target ${{ matrix.target }}
 
       - name: Stage binary
         shell: bash
         run: |
           mkdir -p staging
           cp target/${{ matrix.target }}/release/vox${{ matrix.os == 'windows-latest' && '.exe' || '' }} staging/
-          # Include README + config defaults alongside the binary
-          cp README.md staging/ || true
+          # Include README + config defaults + LICENSE alongside the binary
+          cp README.md staging/
+          cp LICENSE staging/ || true
           mkdir -p staging/config-example
-          cp src/config/defaults.toml staging/config-example/config.toml || true
+          cp src/config/defaults.toml staging/config-example/config.toml
 
       - name: Archive (zip, Windows)
         if: matrix.archive == 'zip'

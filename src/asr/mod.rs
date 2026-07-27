@@ -5,12 +5,12 @@
 //! - [`AsrManager`]: manages engine registry, switching, and fallback.
 //! - Modules: `whisper_local`, `mimo_asr`, `openai_asr`, `aliyun_asr`.
 
-pub mod whisper_local;
-pub mod whisper_cpp;
-pub mod mimo_asr;
-pub mod openai_asr;
 pub mod aliyun_asr;
 pub mod doubao_asr;
+pub mod mimo_asr;
+pub mod openai_asr;
+pub mod whisper_cpp;
+pub mod whisper_local;
 
 use async_trait::async_trait;
 
@@ -80,7 +80,9 @@ impl AsrManager {
             *self.active.write().expect("active lock poisoned") = name.to_string();
             Ok(())
         } else {
-            Err(AsrError::EngineNotFound { name: name.to_string() })
+            Err(AsrError::EngineNotFound {
+                name: name.to_string(),
+            })
         }
     }
 
@@ -151,7 +153,9 @@ mod tests {
 
     #[async_trait]
     impl AsrEngine for MockEngine {
-        fn name(&self) -> &'static str { "mock" }
+        fn name(&self) -> &'static str {
+            "mock"
+        }
         async fn transcribe(&self, _audio: &[u8]) -> Result<String, AsrError> {
             Ok("mock result".to_string())
         }
@@ -161,7 +165,9 @@ mod tests {
 
     #[async_trait]
     impl AsrEngine for FailingEngine {
-        fn name(&self) -> &'static str { "failing" }
+        fn name(&self) -> &'static str {
+            "failing"
+        }
         async fn transcribe(&self, _audio: &[u8]) -> Result<String, AsrError> {
             Err(AsrError::EngineError {
                 engine: "failing".to_string(),
@@ -210,7 +216,10 @@ mod tests {
         let mut mgr = AsrManager::new("mock".into(), vec![]);
         mgr.register(Box::new(MockEngine)); // "mock"
         mgr.register(Box::new(FailingEngine)); // "failing"
-        assert_eq!(mgr.engine_names(), vec!["mock".to_string(), "failing".to_string()]);
+        assert_eq!(
+            mgr.engine_names(),
+            vec!["mock".to_string(), "failing".to_string()]
+        );
         assert_eq!(mgr.cycle_engine(), Some("failing".to_string()));
         assert_eq!(mgr.cycle_engine(), Some("mock".to_string()));
     }

@@ -7,7 +7,7 @@ use arboard::Clipboard;
 use std::thread;
 use std::time::Duration;
 
-use enigo::{Enigo, Key, Keyboard, Direction, Settings};
+use enigo::{Direction, Enigo, Key, Keyboard, Settings};
 
 use crate::inject::{ClipboardSnapshot, InjectError};
 
@@ -16,9 +16,8 @@ use crate::inject::{ClipboardSnapshot, InjectError};
 /// The previous clipboard contents (text *or* image) are snapshotted and
 /// restored after the paste, so the user's clipboard is not destroyed.
 pub fn inject_clipboard(text: &str) -> Result<(), InjectError> {
-    let mut enigo = Enigo::new(&Settings::default()).map_err(|e| {
-        InjectError::Keyboard(format!("Failed to create Enigo instance: {:?}", e))
-    })?;
+    let mut enigo = Enigo::new(&Settings::default())
+        .map_err(|e| InjectError::Keyboard(format!("Failed to create Enigo instance: {:?}", e)))?;
 
     // Snapshot whatever is on the clipboard (text or image) so we can restore
     // it afterwards — this avoids destroying non-text clipboard contents.
@@ -26,12 +25,10 @@ pub fn inject_clipboard(text: &str) -> Result<(), InjectError> {
 
     // Write our text
     {
-        let mut cb = Clipboard::new().map_err(|e| {
-            InjectError::Clipboard(format!("Failed to open clipboard: {}", e))
-        })?;
-        cb.set_text(text).map_err(|e| {
-            InjectError::Clipboard(format!("Failed to set clipboard text: {}", e))
-        })?;
+        let mut cb = Clipboard::new()
+            .map_err(|e| InjectError::Clipboard(format!("Failed to open clipboard: {}", e)))?;
+        cb.set_text(text)
+            .map_err(|e| InjectError::Clipboard(format!("Failed to set clipboard text: {}", e)))?;
     }
 
     // Small delay for clipboard to propagate

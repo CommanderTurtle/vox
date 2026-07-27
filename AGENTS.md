@@ -81,3 +81,4 @@ main.rs (event loop: crossbeam::select! tray events × hotkey events)
 - **Default engines**: local ASR (`whisper-cpp`, fallback `openai`) + free Edge TTS — out-of-box testable with no cloud keys
 - **whisper.cpp server**: start `./whisper-server -m ggml-tiny.bin --port 8080`; vox POSTs WAV to `/inference`
 - **OpenAI ASR as local**: set `[asr.openai].base_url` to a localhost OpenAI-compatible server (faster-whisper, LocalAI)
+- **Linux hotkeys**: `rdev` needs `/dev/uinput` write access; `listen()` fails silently otherwise. Fix: `sudo usermod -aG input $USER` (re-login) or `sudo chmod 0660 /dev/uinput`. `hotkey_failure_hint()` surfaces this in the log.

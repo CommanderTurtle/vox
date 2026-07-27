@@ -3,7 +3,10 @@
 use hound::WavSpec;
 
 /// Encode PCM i16 samples (16 kHz, mono) into WAV bytes.
-pub fn pcm_to_wav(samples: &[i16], sample_rate: u32) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+pub fn pcm_to_wav(
+    samples: &[i16],
+    sample_rate: u32,
+) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
     let spec = WavSpec {
         channels: 1,
         sample_rate,

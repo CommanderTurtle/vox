@@ -3,8 +3,8 @@
 //! This module is only compiled when the `whisper-local` feature is enabled.
 //! When disabled, a stub engine is provided that returns an error.
 
-use async_trait::async_trait;
 use crate::asr::{AsrEngine, AsrError};
+use async_trait::async_trait;
 
 // ── Feature-gated implementation ─────────────────────────────────────
 
@@ -23,8 +23,8 @@ impl WhisperLocalEngine {
     ///
     /// `model_path`: path to a GGML model file (e.g. `ggml-tiny.bin`).
     pub fn new(model_path: &str) -> Result<Self, AsrError> {
-        let ctx = whisper_rs::WhisperContext::new(model_path)
-            .map_err(|e| AsrError::EngineError {
+        let ctx =
+            whisper_rs::WhisperContext::new(model_path).map_err(|e| AsrError::EngineError {
                 engine: "whisper-local".into(),
                 message: format!("Failed to load model '{}': {}", model_path, e),
             })?;
@@ -47,28 +47,24 @@ impl AsrEngine for WhisperLocalEngine {
 
     async fn transcribe(&self, audio_wav: &[u8]) -> Result<String, AsrError> {
         // Decode WAV to get PCM samples (16kHz, mono, i16)
-        let mut reader = hound::WavReader::new(audio_wav)
-            .map_err(|e| AsrError::AudioFormat(e.to_string()))?;
+        let mut reader =
+            hound::WavReader::new(audio_wav).map_err(|e| AsrError::AudioFormat(e.to_string()))?;
 
         let spec = reader.spec();
         if spec.channels != 1 {
-            return Err(AsrError::AudioFormat(
-                format!("Expected mono audio, got {} channels", spec.channels)
-            ));
+            return Err(AsrError::AudioFormat(format!(
+                "Expected mono audio, got {} channels",
+                spec.channels
+            )));
         }
 
         let samples: Vec<f32> = match spec.sample_format {
-            hound::SampleFormat::Int => {
-                reader.samples::<i16>()
-                    .filter_map(|s| s.ok())
-                    .map(|s| s as f32 / 32768.0)
-                    .collect()
-            }
-            hound::SampleFormat::Float => {
-                reader.samples::<f32>()
-                    .filter_map(|s| s.ok())
-                    .collect()
-            }
+            hound::SampleFormat::Int => reader
+                .samples::<i16>()
+                .filter_map(|s| s.ok())
+                .map(|s| s as f32 / 32768.0)
+                .collect(),
+            hound::SampleFormat::Float => reader.samples::<f32>().filter_map(|s| s.ok()).collect(),
         };
 
         let samples = whisper_rs::convert_stereo_to_mono_audio(&samples)
@@ -80,28 +76,32 @@ impl AsrEngine for WhisperLocalEngine {
 
         // whisper-rs requires the audio to be in f32 at 16kHz
         let result = tokio::task::spawn_blocking(move || {
-            let mut state = ctx.create_state()
+            let mut state = ctx
+                .create_state()
                 .map_err(|e| format!("Failed to create state: {}", e))?;
 
-            state.full(params, &samples[..])
+            state
+                .full(params, &samples[..])
                 .map_err(|e| format!("Inference failed: {}", e))?;
 
             let n_segments = state.full_n_segments();
             let mut text = String::new();
 
             for i in 0..n_segments {
-                let segment = state.full_get_segment_text(i)
+                let segment = state
+                    .full_get_segment_text(i)
                     .map_err(|e| format!("Failed to get segment {}: {}", i, e))?;
                 text.push_str(&segment);
                 text.push(' ');
             }
 
             Ok::<_, String>(text.trim().to_string())
-        }).await
-            .map_err(|e| AsrError::EngineError {
-                engine: "whisper-local".into(),
-                message: format!("Task join failed: {}", e),
-            })?;
+        })
+        .await
+        .map_err(|e| AsrError::EngineError {
+            engine: "whisper-local".into(),
+            message: format!("Task join failed: {}", e),
+        })?;
 
         result.map_err(|e| AsrError::EngineError {
             engine: "whisper-local".into(),

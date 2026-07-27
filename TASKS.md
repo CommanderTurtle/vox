@@ -107,7 +107,7 @@ cargo run            ✅ 托盘正常启动
 vox transcribe x.wav ✅ 本地 whisper.cpp ASR 端到端通过
 vox tts "..."        ✅ Edge TTS 合成 MP3 + rodio 播放通过
 vox tts "..."        ✅ 豆包 TTS (seed-tts-2.0) 合成 PCM->WAV + 播放通过
-vox transcribe ...   ⚠️ 豆包 ASR 协议链路通，需豆包语音控制台专用 key（Ark key 返回 401）
+vox transcribe ...   ✅ 豆包 ASR (Plan 路径 + Ark key) 端到端识别通过
 bash scripts/package.sh ✅ 打包 dist/vox-v0.1.2-windows-x86_64.zip 通过
 ```
 
@@ -154,3 +154,113 @@ bash scripts/package.sh ✅ 打包 dist/vox-v0.1.2-windows-x86_64.zip 通过
 - `package.sh` 重写（跨平台 zip/tar.gz）；`.github/workflows/release.yml` 三平台构建 + Release
 
 **验收:** ✅ `cargo build --release` + `cargo test` 18/18 + `cargo clippy` 零警告通过；`bash scripts/package.sh` 本地打包验证通过，产物 `dist/vox-v0.1.2-windows-x86_64.zip` 含 `vox.exe` + `README.md` + `LICENSE` + `config-example/config.toml`。跨平台 GitHub Actions release workflow 就绪，待推送 tag 触发三平台构建。
+
+---
+
+# 审计发现的工作项（按优先级）
+
+> 以下任务来自代码/CI/跨平台审计，逐条执行。
+
+## Task 14: [高] Linux 全局热键 uinput 权限文档缺失
+
+**涉及文件:** `README.md`, `AGENTS.md`, `src/app/hotkey.rs`
+
+- rdev 在 Linux 监听全局热键需 `/dev/uinput` 写权限；用户须加入 `input` 组或 `chmod 0660 /dev/uinput`
+- 当前文档零提及，Linux 用户首次运行热键会静默失效（仅 log error 后退出）
+- README 加 Linux 前置条件说明；热键监听失败时给更明确提示
+
+**验收:** README/AGENTS 含 Linux uinput 权限说明；hotkey 启动失败日志含可操作的修复指引
+
+---
+
+## Task 15: [高] 豆包 ASR 端到端验证（需专用 key）
+
+**涉及文件:** `src/asr/doubao_asr.rs`（修复错误帧解析 + 关闭 gzip 压缩）
+
+- 代码与协议链路已验证；排查发现 Ark key 走 Plan 路径（`/api/v3/plan/sauc/`）可同时用于 TTS + ASR
+- 修复二进制帧解析 bug：错误帧（msg_type=0xF）布局为 `[4B header][4B error_code][4B msg_size][msg]`，与正常帧不同，原先误把 error_code 当 payload_size 读取
+- 关闭 payload gzip 压缩：服务端对客户端 gzip payload 报 `unable to ungzip payload: EOF`，改为 compression=NONE 后正常
+- `parse_error_frame` 单独处理错误帧，提取 JSON `{"error":"..."}` 内层消息
+
+**验收:** ✅ `vox transcribe <录音.wav>` 走 doubao-asr（Plan 路径 + Ark key）返回识别文本"测试"
+
+---
+
+## Task 16: [中] 补日常 CI workflow（push/PR 触发 test+clippy+fmt）
+
+**涉及文件:** `.github/workflows/ci.yml` (新)
+
+- 现状仅 `release.yml`（tag 触发），push 到 main / PR 时不跑任何检查
+- 源码 18 个单测从不被 CI 执行
+- 新增 ci.yml：push/PR 触发 `cargo fmt --check` + `cargo clippy --all-targets -- -D warnings` + `cargo test`
+
+**验收:** ci.yml 推送后在 GitHub Actions 看到三步全绿（本地已验证 fmt+clippy+test 通过；fmt 已全量应用 `cargo fmt`）
+
+---
+
+## Task 17: [中] 新引擎纯逻辑补单元测试
+
+**涉及文件:** `src/asr/doubao_asr.rs`, `src/tts/doubao_tts.rs`, `src/app/state.rs`, `src/tts/edge_tts.rs`
+
+- `doubao_asr`: `build_frame`/`parse_server_frame` 往返、`extract_result_text`、`gzip_bytes`↔`maybe_gunzip` 往返、错误帧/截断帧分支
+- `doubao_tts`: `parse_frame` 五分支（audio/skip/end/错误码/非法 JSON）
+- `state`: `RecordMode::from_str`/`as_str` round-trip + 大小写容错
+- `edge_tts`: `lang_for_voice`、`build_ssml`（XML 转义）
+
+**验收:** ✅ `cargo test` 18→39 通过（+21）；clippy 零警告；fmt 干净。覆盖错误帧解析回归、gzip 往返、NDJSON 五分支、RecordMode 转换、SSML 转义
+
+---
+
+## Task 18: [中] 迁移已废弃的 actions-rs/cargo Action
+
+**涉及文件:** `.github/workflows/release.yml`
+
+- `actions-rs/cargo@v1` 已 archived，触发 Node.js 20 deprecation 警告
+- 改用 `dtolnay/rust-toolchain` + 直接 `run: cargo build`
+
+**验收:** ✅ release.yml 改用 `run: cargo build`(dtolnay 工具链已装)；移除 `actions-rs/cargo`；无 deprecation 警告
+
+---
+
+## Task 19: [低] macOS 分发包未签名/公证
+
+**涉及文件:** `.github/workflows/release.yml`
+
+- 裸二进制被 Gatekeeper 拦截，用户需手动 `xattr -d com.apple.quarantine`
+- 需 Apple Developer 账号做 codesign + notarize（成本较高，待定）
+
+**验收:** 待定（依赖 Apple Developer 账号）
+
+---
+
+## Task 20: [低] .gitignore 补全
+
+**涉及文件:** `.gitignore`
+
+- 补 `*.log`、`.vscode/`、`.idea/`、`.DS_Store`、`Thumbs.db`、`.env`、`*.local.toml`
+- 有 API key 场景，防密钥泄露
+
+**验收:** .gitignore 含上述规则
+
+---
+
+## Task 21: [低] tray-icon 初始化失败上抛错误
+
+**涉及文件:** `src/tray/mod.rs`
+
+- 当前 `create_default_icon`/`TrayIconBuilder::build()` 失败仅 log error 后 return，托盘静默消失但程序继续跑
+- 改为上抛错误或至少在托盘缺失时给用户明确反馈
+
+**验收:** ✅ 托盘初始化失败时 log::error 含完整上下文（失败原因 + 热键/CLI 仍可用 + Linux 桌面环境提示），不再静默 return
+
+---
+
+## Task 22: [低] 配置双写 + defaults.toml 静默吞错
+
+**涉及文件:** `Cargo.toml`, `.github/workflows/release.yml`, `scripts/package.sh`
+
+- `[profile.release]` 与 release.yml env 重复设 LTO/codegen-units，改一处易忘另一处
+- package.sh 复制 defaults.toml 用 `|| true` 静默吞错
+- 统一 profile 配置到 Cargo.toml，workflow 不重复设；移除 `|| true`
+
+**验收:** ✅ release.yml 移除重复 LTO env（单一来源 Cargo.toml `[profile.release]`）；README/defaults.toml 复制移除 `|| true`（缺失即报错）；LICENSE 保留 `|| true`（非运行必需）

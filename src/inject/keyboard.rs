@@ -9,9 +9,8 @@ use crate::inject::InjectError;
 
 /// Inject text by simulating keystrokes.
 pub fn inject_keyboard(text: &str) -> Result<(), InjectError> {
-    let mut enigo = Enigo::new(&Settings::default()).map_err(|e| {
-        InjectError::Keyboard(format!("Failed to create Enigo instance: {:?}", e))
-    })?;
+    let mut enigo = Enigo::new(&Settings::default())
+        .map_err(|e| InjectError::Keyboard(format!("Failed to create Enigo instance: {:?}", e)))?;
 
     // Small delay to ensure the target app is ready
     thread::sleep(Duration::from_millis(50));
@@ -22,9 +21,9 @@ pub fn inject_keyboard(text: &str) -> Result<(), InjectError> {
     }
 
     // Use enigo.text() which handles Unicode text natively
-    enigo.text(text).map_err(|e| {
-        InjectError::Keyboard(format!("enigo.text() failed: {:?}", e))
-    })?;
+    enigo
+        .text(text)
+        .map_err(|e| InjectError::Keyboard(format!("enigo.text() failed: {:?}", e)))?;
 
     Ok(())
 }

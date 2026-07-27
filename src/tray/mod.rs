@@ -12,9 +12,9 @@
 //! rebuilds the menu and tooltip from it. Neither side knows the other's
 //! internals.
 
-use tray_icon::{Icon, TrayIconBuilder};
-pub use tray_icon::TrayIcon;
 use tray_icon::menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
+pub use tray_icon::TrayIcon;
+use tray_icon::{Icon, TrayIconBuilder};
 
 use crate::app::state::AppState;
 
@@ -67,7 +67,10 @@ impl MenuModel {
             AppState::Recording => "Recording…",
             AppState::Transcribing => "Transcribing…",
         };
-        format!("vox — {} | ASR: {} | TTS: {}", state, self.asr_active, self.tts_active)
+        format!(
+            "vox — {} | ASR: {} | TTS: {}",
+            state, self.asr_active, self.tts_active
+        )
     }
 }
 
@@ -115,7 +118,11 @@ fn build_menu(m: &MenuModel) -> Menu {
     let inject_menu = Submenu::new("Inject Mode", true);
     for mode in &["keyboard", "clipboard"] {
         let checked = mode == &m.inject_mode;
-        let label = if *mode == "keyboard" { "Keyboard" } else { "Clipboard" };
+        let label = if *mode == "keyboard" {
+            "Keyboard"
+        } else {
+            "Clipboard"
+        };
         let _ = inject_menu.append(&CheckMenuItem::with_id(
             inject_id(mode),
             label,
@@ -178,7 +185,12 @@ fn build_menu(m: &MenuModel) -> Menu {
     let _ = menu.append(&PredefinedMenuItem::separator());
 
     // ── Actions ────────────────────────────────────────────────────────
-    let _ = menu.append(&MenuItem::with_id(ID_TOGGLE, "Toggle Recording", true, None));
+    let _ = menu.append(&MenuItem::with_id(
+        ID_TOGGLE,
+        "Toggle Recording",
+        true,
+        None,
+    ));
     let _ = menu.append(&MenuItem::with_id(ID_SETTINGS, "Settings…", true, None));
     let _ = menu.append(&MenuItem::with_id(ID_QUIT, "Quit", true, None));
 
@@ -229,7 +241,10 @@ fn map_event(id: &str, model: &MenuModel) -> Option<TrayEvent> {
 pub fn spawn_tray(
     initial_model: MenuModel,
     event_sender: crossbeam::channel::Sender<TrayEvent>,
-) -> (crossbeam::channel::Sender<TrayCommand>, std::thread::JoinHandle<()>) {
+) -> (
+    crossbeam::channel::Sender<TrayCommand>,
+    std::thread::JoinHandle<()>,
+) {
     let (cmd_tx, cmd_rx) = crossbeam::channel::unbounded::<TrayCommand>();
 
     let handle = std::thread::spawn(move || {
@@ -237,7 +252,13 @@ pub fn spawn_tray(
         let icon = match create_default_icon() {
             Ok(i) => i,
             Err(e) => {
-                log::error!("Failed to create tray icon: {}", e);
+                log::error!(
+                    "Failed to create tray icon: {}. \
+                     The tray UI is unavailable, but hotkeys and CLI subcommands \
+                     still work. On Linux, ensure a supported desktop session \
+                     (X11/GTK or Wayland) is running.",
+                    e
+                );
                 return;
             }
         };
@@ -254,7 +275,13 @@ pub fn spawn_tray(
         {
             Ok(t) => t,
             Err(e) => {
-                log::error!("Failed to build tray icon: {}", e);
+                log::error!(
+                    "Failed to build tray icon: {}. \
+                     The tray UI is unavailable, but hotkeys and CLI subcommands \
+                     still work. On Linux, ensure a supported desktop session \
+                     (X11/GTK or Wayland) is running.",
+                    e
+                );
                 return;
             }
         };
@@ -336,10 +363,14 @@ fn pump_windows_messages(
             }
 
             // Pump all pending Windows messages.
-            let mut msg: windows_sys::Win32::UI::WindowsAndMessaging::MSG =
-                std::mem::zeroed();
-            while windows_sys::Win32::UI::WindowsAndMessaging::
-                PeekMessageW(&mut msg, ptr::null_mut(), 0, 0, 1) != 0
+            let mut msg: windows_sys::Win32::UI::WindowsAndMessaging::MSG = std::mem::zeroed();
+            while windows_sys::Win32::UI::WindowsAndMessaging::PeekMessageW(
+                &mut msg,
+                ptr::null_mut(),
+                0,
+                0,
+                1,
+            ) != 0
             {
                 if msg.message == windows_sys::Win32::UI::WindowsAndMessaging::WM_QUIT {
                     return;

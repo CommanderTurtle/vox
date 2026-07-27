@@ -4,9 +4,9 @@
 //! - [`TtsEngine`] trait: all TTS engines implement this.
 //! - [`TtsManager`]: manages engine registry and switching.
 
-pub mod mimo_tts;
-pub mod edge_tts;
 pub mod doubao_tts;
+pub mod edge_tts;
+pub mod mimo_tts;
 pub mod playback;
 
 use async_trait::async_trait;
@@ -118,7 +118,9 @@ impl TtsManager {
             *self.active.write().expect("active lock poisoned") = name.to_string();
             Ok(())
         } else {
-            Err(TtsError::EngineNotFound { name: name.to_string() })
+            Err(TtsError::EngineNotFound {
+                name: name.to_string(),
+            })
         }
     }
 

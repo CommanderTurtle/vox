@@ -70,52 +70,48 @@ impl AudioCapture {
             };
 
             let stream_result = match config.sample_format() {
-                cpal::SampleFormat::I16 => {
-                    device.build_input_stream(
-                        &config.config(),
-                        move |data: &[i16], _: &cpal::InputCallbackInfo| {
-                            if stop_flag_clone.load(Ordering::Relaxed) {
-                                return;
-                            }
-                            let mut buf = samples_clone.lock().unwrap();
-                            if channels > 1 {
-                                for (i, &sample) in data.iter().enumerate() {
-                                    if i % channels == 0 {
-                                        buf.push(sample);
-                                    }
+                cpal::SampleFormat::I16 => device.build_input_stream(
+                    &config.config(),
+                    move |data: &[i16], _: &cpal::InputCallbackInfo| {
+                        if stop_flag_clone.load(Ordering::Relaxed) {
+                            return;
+                        }
+                        let mut buf = samples_clone.lock().unwrap();
+                        if channels > 1 {
+                            for (i, &sample) in data.iter().enumerate() {
+                                if i % channels == 0 {
+                                    buf.push(sample);
                                 }
-                            } else {
-                                buf.extend_from_slice(data);
                             }
-                        },
-                        err_fn,
-                        None,
-                    )
-                }
-                cpal::SampleFormat::F32 => {
-                    device.build_input_stream(
-                        &config.config(),
-                        move |data: &[f32], _: &cpal::InputCallbackInfo| {
-                            if stop_flag_clone.load(Ordering::Relaxed) {
-                                return;
-                            }
-                            let mut buf = samples_clone.lock().unwrap();
-                            if channels > 1 {
-                                for (i, &sample) in data.iter().enumerate() {
-                                    if i % channels == 0 {
-                                        buf.push((sample * 32767.0) as i16);
-                                    }
-                                }
-                            } else {
-                                for &sample in data {
+                        } else {
+                            buf.extend_from_slice(data);
+                        }
+                    },
+                    err_fn,
+                    None,
+                ),
+                cpal::SampleFormat::F32 => device.build_input_stream(
+                    &config.config(),
+                    move |data: &[f32], _: &cpal::InputCallbackInfo| {
+                        if stop_flag_clone.load(Ordering::Relaxed) {
+                            return;
+                        }
+                        let mut buf = samples_clone.lock().unwrap();
+                        if channels > 1 {
+                            for (i, &sample) in data.iter().enumerate() {
+                                if i % channels == 0 {
                                     buf.push((sample * 32767.0) as i16);
                                 }
                             }
-                        },
-                        err_fn,
-                        None,
-                    )
-                }
+                        } else {
+                            for &sample in data {
+                                buf.push((sample * 32767.0) as i16);
+                            }
+                        }
+                    },
+                    err_fn,
+                    None,
+                ),
                 fmt => {
                     log::error!("Unsupported sample format: {:?}", fmt);
                     return;

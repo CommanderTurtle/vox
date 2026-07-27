@@ -79,9 +79,11 @@ impl AsrEngine for OpenaiAsrEngine {
         if !status.is_success() {
             return Err(AsrError::EngineError {
                 engine: "openai".into(),
-                message: format!("API returned {}: {}",
+                message: format!(
+                    "API returned {}: {}",
                     status.as_u16(),
-                    body.chars().take(300).collect::<String>()),
+                    body.chars().take(300).collect::<String>()
+                ),
             });
         }
 
@@ -90,16 +92,15 @@ impl AsrEngine for OpenaiAsrEngine {
             text: String,
         }
 
-        let resp: TranscriptionResponse = serde_json::from_str(&body).map_err(|e| {
-            AsrError::EngineError {
+        let resp: TranscriptionResponse =
+            serde_json::from_str(&body).map_err(|e| AsrError::EngineError {
                 engine: "openai".into(),
                 message: format!(
                     "Failed to parse response JSON: {} — body: {}",
                     e,
                     body.chars().take(200).collect::<String>()
                 ),
-            }
-        })?;
+            })?;
 
         Ok(resp.text.trim().to_string())
     }

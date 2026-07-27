@@ -46,7 +46,7 @@ use crate::asr::{AsrEngine, AsrError};
 /// Non-streaming endpoint: collect all audio + an empty last packet, then the
 /// server returns one final result. Simpler than the bidirectional variants
 /// and most accurate for the record-then-transcribe use case.
-const ASR_ENDPOINT: &str = "wss://openspeech.bytedance.com/api/v3/sauc/bigmodel_nostream";
+const ASR_ENDPOINT: &str = "wss://openspeech.bytedance.com/api/v3/plan/sauc/bigmodel_nostream";
 const RESOURCE_ID: &str = "volc.seedasr.sauc.duration";
 
 // Header byte 0: version=1 (high nibble), header_size_code=1 (low nibble).
@@ -116,7 +116,11 @@ impl AsrEngine for DoubaoAsrEngine {
                             .as_ref()
                             .map(|b| String::from_utf8_lossy(b).to_string())
                             .unwrap_or_default();
-                        format!("HTTP {} - {}", status, body.chars().take(300).collect::<String>())
+                        format!(
+                            "HTTP {} - {}",
+                            status,
+                            body.chars().take(300).collect::<String>()
+                        )
                     }
                     other => other.to_string(),
                 };
@@ -137,24 +141,27 @@ impl AsrEngine for DoubaoAsrEngine {
             response.headers()
         );
 
-        // 1. Send the FULL_CLIENT_REQUEST (JSON config, gzip-compressed).
+        // 1. Send the FULL_CLIENT_REQUEST (JSON config).
+        // NOTE: gzip on the config payload triggers "unable to ungzip payload:
+        // EOF" on the server side, so we send it uncompressed (compression=0).
         let config_json = build_config_json();
         let full_request = build_frame(
             MSG_FULL_CLIENT_REQUEST,
             FLAG_NO_SEQUENCE,
             SER_JSON,
-            COMP_GZIP,
+            COMP_NONE,
             &config_json,
-            true, // gzip the payload
+            false, // no gzip
         );
-        ws_stream.send(Message::Binary(full_request)).await.map_err(|e| {
-            AsrError::EngineError {
+        ws_stream
+            .send(Message::Binary(full_request))
+            .await
+            .map_err(|e| AsrError::EngineError {
                 engine: "doubao-asr".into(),
                 message: format!("send full request failed: {}", e),
-            }
-        })?;
+            })?;
 
-        // 2. Stream the WAV bytes in AUDIO_ONLY chunks (gzip-compressed).
+        // 2. Stream the WAV bytes in AUDIO_ONLY chunks (uncompressed).
         let mut offset = 0;
         while offset < audio_wav.len() {
             let end = (offset + AUDIO_CHUNK_SIZE).min(audio_wav.len());
@@ -163,16 +170,17 @@ impl AsrEngine for DoubaoAsrEngine {
                 MSG_AUDIO_ONLY,
                 FLAG_NO_SEQUENCE,
                 SER_NONE,
-                COMP_GZIP,
+                COMP_NONE,
                 chunk,
-                true,
+                false,
             );
-            ws_stream.send(Message::Binary(frame)).await.map_err(|e| {
-                AsrError::EngineError {
+            ws_stream
+                .send(Message::Binary(frame))
+                .await
+                .map_err(|e| AsrError::EngineError {
                     engine: "doubao-asr".into(),
                     message: format!("send audio chunk failed: {}", e),
-                }
-            })?;
+                })?;
             offset = end;
         }
 
@@ -181,17 +189,21 @@ impl AsrEngine for DoubaoAsrEngine {
             MSG_AUDIO_ONLY,
             FLAG_LAST_NO_SEQUENCE,
             SER_NONE,
-            COMP_GZIP,
+            COMP_NONE,
             &[],
             false, // empty payload, no need to gzip
         );
-        ws_stream.send(Message::Binary(last_packet)).await.map_err(|e| {
-            AsrError::EngineError {
+        ws_stream
+            .send(Message::Binary(last_packet))
+            .await
+            .map_err(|e| AsrError::EngineError {
                 engine: "doubao-asr".into(),
                 message: format!("send last packet failed: {}", e),
-            }
-        })?;
-        log::debug!("doubao-asr: sent {} bytes of audio in chunks", audio_wav.len());
+            })?;
+        log::debug!(
+            "doubao-asr: sent {} bytes of audio in chunks",
+            audio_wav.len()
+        );
 
         // 4. Read responses until we get the final result or the server closes.
         let mut full_text = String::new();
@@ -361,6 +373,14 @@ fn parse_server_frame(data: &[u8]) -> Result<ServerFrame, AsrError> {
     // is_last when the "last packet" flag bit is set (0x2 or 0x3).
     let is_last = (flags & 0x02) != 0;
 
+    // Error frames (msg_type 0xF) have a distinct layout with NO sequence
+    // field and NO payload_size:  [4B header][4B error_code][4B msg_size][msg].
+    // They must be parsed before the generic payload_size read below, which
+    // would otherwise mistake error_code for the payload length.
+    if msg_type == MSG_SERVER_ERROR {
+        return parse_error_frame(data, offset, serialization, compression);
+    }
+
     let payload_size = u32::from_be_bytes([
         data[offset],
         data[offset + 1],
@@ -396,26 +416,61 @@ fn parse_server_frame(data: &[u8]) -> Result<ServerFrame, AsrError> {
             };
             Ok(ServerFrame::Response { text, is_last })
         }
-        MSG_SERVER_ERROR => {
-            // Error layout: [4B header][4B error_code (BE u32)][4B msg_size][msg]
-            // (no sequence field on error frames per the reference protocol.)
-            if payload.len() < 4 {
-                return Err(AsrError::EngineError {
-                    engine: "doubao-asr".into(),
-                    message: "error frame missing code".into(),
-                });
-            }
-            let code = u32::from_be_bytes([payload[0], payload[1], payload[2], payload[3]]);
-            let msg_bytes = &payload[4..];
-            let raw = maybe_gunzip(msg_bytes, compression)?;
-            let message = String::from_utf8_lossy(&raw).to_string();
-            Ok(ServerFrame::Error { code, message })
-        }
         other => Err(AsrError::EngineError {
             engine: "doubao-asr".into(),
             message: format!("unexpected message type: 0x{:x}", other),
         }),
     }
+}
+
+/// Parse a SERVER_ERROR frame.
+///
+/// Layout: `[4B header][4B error_code (BE u32)][4B msg_size (BE u32)][msg]`.
+/// `offset` is where parsing should start (just past the 4-byte header and
+/// any sequence field, though error frames carry neither in practice).
+fn parse_error_frame(
+    data: &[u8],
+    offset: usize,
+    serialization: u8,
+    compression: u8,
+) -> Result<ServerFrame, AsrError> {
+    if data.len() < offset + 8 {
+        return Err(AsrError::EngineError {
+            engine: "doubao-asr".into(),
+            message: "error frame too short for code + size".into(),
+        });
+    }
+    let code = u32::from_be_bytes([
+        data[offset],
+        data[offset + 1],
+        data[offset + 2],
+        data[offset + 3],
+    ]);
+    let msg_size = u32::from_be_bytes([
+        data[offset + 4],
+        data[offset + 5],
+        data[offset + 6],
+        data[offset + 7],
+    ]) as usize;
+    let msg_start = offset + 8;
+    let msg_bytes = if data.len() >= msg_start + msg_size {
+        &data[msg_start..msg_start + msg_size]
+    } else {
+        // Truncated message body - take what we have.
+        &data[msg_start..]
+    };
+    let raw = maybe_gunzip(msg_bytes, compression)?;
+    let mut message = String::from_utf8_lossy(&raw).to_string();
+    // The error body is JSON like {"error":"..."} on the plan path, or a raw
+    // string on the standard path. Try to extract the inner message.
+    if serialization == SER_JSON {
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&message) {
+            if let Some(s) = v.get("error").and_then(|e| e.as_str()) {
+                message = s.to_string();
+            }
+        }
+    }
+    Ok(ServerFrame::Error { code, message })
 }
 
 /// Decompress a payload if it was gzip-compressed; otherwise return as-is.
@@ -425,10 +480,12 @@ fn maybe_gunzip(data: &[u8], compression: u8) -> Result<Vec<u8>, AsrError> {
         use std::io::Read;
         let mut decoder = GzDecoder::new(data);
         let mut out = Vec::new();
-        decoder.read_to_end(&mut out).map_err(|e| AsrError::EngineError {
-            engine: "doubao-asr".into(),
-            message: format!("gzip decompress failed: {}", e),
-        })?;
+        decoder
+            .read_to_end(&mut out)
+            .map_err(|e| AsrError::EngineError {
+                engine: "doubao-asr".into(),
+                message: format!("gzip decompress failed: {}", e),
+            })?;
         Ok(out)
     } else {
         Ok(data.to_vec())
@@ -482,4 +539,154 @@ fn build_handshake_request(api_key: &str) -> Result<Request<()>, AsrError> {
             engine: "doubao-asr".into(),
             message: format!("failed to build handshake request: {}", e),
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Build a server RESPONSE frame (msg_type 0x9) with the given flags,
+    /// serialization, compression and payload, mimicking what the server sends.
+    /// When flags indicate a sequence field is present (0x1 or 0x3), a 4-byte
+    /// sequence number is inserted before the payload_size, matching the wire
+    /// format the server actually emits.
+    fn build_server_response_frame(
+        flags: u8,
+        serialization: u8,
+        compression: u8,
+        payload: &[u8],
+    ) -> Vec<u8> {
+        let header_byte1 = (MSG_SERVER_RESPONSE << 4) | flags;
+        let header_byte2 = (serialization << 4) | compression;
+        let has_sequence = (flags & 0x01) != 0 || flags == 0x03;
+        let mut frame = Vec::with_capacity(8 + payload.len() + if has_sequence { 4 } else { 0 });
+        frame.push(HDR_VERSION);
+        frame.push(header_byte1);
+        frame.push(header_byte2);
+        frame.push(0x00);
+        if has_sequence {
+            frame.extend_from_slice(&1u32.to_be_bytes()); // sequence = 1
+        }
+        frame.extend_from_slice(&(payload.len() as u32).to_be_bytes());
+        frame.extend_from_slice(payload);
+        frame
+    }
+
+    /// Build a server ERROR frame (msg_type 0xF):
+    /// `[4B header][4B error_code][4B msg_size][msg]`.
+    fn build_server_error_frame(code: u32, message: &str) -> Vec<u8> {
+        let msg_bytes = message.as_bytes();
+        let header_byte1 = (MSG_SERVER_ERROR << 4) | FLAG_NO_SEQUENCE;
+        let mut frame = Vec::with_capacity(12 + msg_bytes.len());
+        frame.push(HDR_VERSION);
+        frame.push(header_byte1);
+        frame.push((SER_JSON << 4) | COMP_NONE); // serialization=JSON so inner msg is extracted
+        frame.push(0x00);
+        frame.extend_from_slice(&code.to_be_bytes());
+        frame.extend_from_slice(&(msg_bytes.len() as u32).to_be_bytes());
+        frame.extend_from_slice(msg_bytes);
+        frame
+    }
+
+    #[test]
+    fn test_build_frame_layout() {
+        // A frame built without gzip: [4B header][4B size BE][payload].
+        let payload = b"hello";
+        let frame = build_frame(
+            MSG_AUDIO_ONLY,
+            FLAG_NO_SEQUENCE,
+            SER_NONE,
+            COMP_NONE,
+            payload,
+            false,
+        );
+        assert_eq!(frame.len(), 8 + payload.len());
+        assert_eq!(frame[0], HDR_VERSION);
+        assert_eq!((frame[1] >> 4) & 0x0F, MSG_AUDIO_ONLY);
+        assert_eq!(frame[1] & 0x0F, FLAG_NO_SEQUENCE);
+        let size = u32::from_be_bytes([frame[4], frame[5], frame[6], frame[7]]);
+        assert_eq!(size as usize, payload.len());
+        assert_eq!(&frame[8..], payload);
+    }
+
+    #[test]
+    fn test_parse_response_frame_with_sequence() {
+        // Server response with flags=0x1 (positive sequence) carries a 4-byte
+        // sequence field before payload_size. This is the common case observed
+        // from the real server.
+        let json = br#"{"result":{"text":"hello world"}}"#;
+        let frame = build_server_response_frame(0x01, SER_JSON, COMP_NONE, json);
+        match parse_server_frame(&frame).unwrap() {
+            ServerFrame::Response { text, is_last } => {
+                assert_eq!(text, "hello world");
+                assert!(!is_last);
+            }
+            ServerFrame::Error { .. } => panic!("expected Response, got Error"),
+        }
+    }
+
+    #[test]
+    fn test_parse_response_frame_is_last() {
+        // flags=0x2 -> last packet marker.
+        let json = br#"{"result":{"text":"final"}}"#;
+        let frame = build_server_response_frame(0x02, SER_JSON, COMP_NONE, json);
+        match parse_server_frame(&frame).unwrap() {
+            ServerFrame::Response { is_last, .. } => assert!(is_last),
+            ServerFrame::Error { .. } => panic!("expected Response, got Error"),
+        }
+    }
+
+    #[test]
+    fn test_parse_error_frame() {
+        // Regression: error frames (msg_type 0xF) have a different layout -
+        // [4B header][4B error_code][4B msg_size][msg] - and must not be parsed
+        // as if error_code were a payload_size (that caused "declared 45000000
+        // bytes" panics before the fix).
+        let frame = build_server_error_frame(45_000_000, r#"{"error":"decode failed"}"#);
+        match parse_server_frame(&frame).unwrap() {
+            ServerFrame::Error { code, message } => {
+                assert_eq!(code, 45_000_000);
+                assert_eq!(message, "decode failed");
+            }
+            ServerFrame::Response { .. } => panic!("expected Error, got Response"),
+        }
+    }
+
+    #[test]
+    fn test_parse_frame_too_short() {
+        assert!(parse_server_frame(&[0x11, 0x91]).is_err());
+    }
+
+    #[test]
+    fn test_extract_result_text() {
+        assert_eq!(
+            extract_result_text(r#"{"result":{"text":"abc"}}"#, SER_JSON),
+            "abc"
+        );
+        // Missing result -> empty.
+        assert_eq!(extract_result_text(r#"{"foo":1}"#, SER_JSON), "");
+        // Missing text field -> empty.
+        assert_eq!(extract_result_text(r#"{"result":{}}"#, SER_JSON), "");
+        // Non-JSON serialization -> empty.
+        assert_eq!(extract_result_text("anything", SER_NONE), "");
+    }
+
+    #[test]
+    fn test_build_config_json_fields() {
+        let json = build_config_json();
+        let v: serde_json::Value = serde_json::from_slice(&json).unwrap();
+        assert_eq!(v["audio"]["format"], "wav");
+        assert_eq!(v["audio"]["rate"], 16000);
+        assert_eq!(v["request"]["model_name"], "bigmodel");
+        assert_eq!(v["request"]["enable_punc"], true);
+    }
+
+    #[test]
+    fn test_gzip_roundtrip() {
+        // gzip_bytes + maybe_gunzip should round-trip arbitrary data.
+        let data = b"The quick brown fox jumps over the lazy dog. 1234567890";
+        let compressed = gzip_bytes(data);
+        let decompressed = maybe_gunzip(&compressed, COMP_GZIP).unwrap();
+        assert_eq!(decompressed, data);
+    }
 }

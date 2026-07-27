@@ -89,9 +89,11 @@ impl AsrEngine for MimoAsrEngine {
         if !status.is_success() {
             return Err(AsrError::EngineError {
                 engine: "mimo".into(),
-                message: format!("API returned {}: {}",
+                message: format!(
+                    "API returned {}: {}",
                     status.as_u16(),
-                    body.chars().take(300).collect::<String>()),
+                    body.chars().take(300).collect::<String>()
+                ),
             });
         }
 
@@ -111,18 +113,18 @@ impl AsrEngine for MimoAsrEngine {
             content: Option<String>,
         }
 
-        let resp: MimoResponse = serde_json::from_str(&body).map_err(|e| {
-            AsrError::EngineError {
+        let resp: MimoResponse =
+            serde_json::from_str(&body).map_err(|e| AsrError::EngineError {
                 engine: "mimo".into(),
                 message: format!(
                     "Failed to parse response JSON: {} — body: {}",
                     e,
                     body.chars().take(200).collect::<String>()
                 ),
-            }
-        })?;
+            })?;
 
-        let text = resp.choices
+        let text = resp
+            .choices
             .first()
             .and_then(|c| c.message.content.as_deref())
             .unwrap_or("")

@@ -8,25 +8,25 @@ mod audio;
 mod config;
 mod inject;
 mod settings;
-mod tts;
 mod tray;
+mod tts;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use crossbeam::channel;
 
-use app::hotkey::{HotkeyBinding, HotkeyEvent, start_hotkey_listener};
+use app::hotkey::{start_hotkey_listener, HotkeyBinding, HotkeyEvent};
+use app::state::{AppState, RecordMode};
 use asr::AsrManager;
 use audio::capture::AudioCapture;
 use audio::utils::{pcm_to_wav, resample_linear};
 use config::ConfigManager;
-use inject::{InjectMode, inject_text};
-use app::state::{AppState, RecordMode};
-use tray::{TrayEvent, TrayCommand, MenuModel, spawn_tray, refresh_menu};
-use tts::TtsManager;
-use tts::TtsInputMode;
+use inject::{inject_text, InjectMode};
+use tray::{refresh_menu, spawn_tray, MenuModel, TrayCommand, TrayEvent};
 use tts::mimo_tts::MimoTtsEngine;
+use tts::TtsInputMode;
+use tts::TtsManager;
 
 /// Result of an async ASR job, posted back to the main loop.
 enum AsrResult {
@@ -110,8 +110,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         } else {
             &cfg.hotkey.tts_trigger
         };
-        let tts = HotkeyBinding::parse(tts_str)
-            .expect("Invalid tts_trigger hotkey config");
+        let tts = HotkeyBinding::parse(tts_str).expect("Invalid tts_trigger hotkey config");
         (record, engine, inject, tts)
     };
 
@@ -233,7 +232,10 @@ fn push_tray(ctx: &AppCtx, app_state: AppState) {
 }
 
 /// Handle a tray event. Returns false if the app should quit.
-fn handle_tray_event(ctx: &mut AppCtx, msg: Result<TrayEvent, crossbeam::channel::RecvError>) -> bool {
+fn handle_tray_event(
+    ctx: &mut AppCtx,
+    msg: Result<TrayEvent, crossbeam::channel::RecvError>,
+) -> bool {
     match msg {
         Ok(TrayEvent::Quit) => {
             log::info!("Quit requested.");
@@ -338,7 +340,10 @@ fn handle_hotkey_event(ctx: &mut AppCtx, event: HotkeyEvent) {
         }
         HotkeyEvent::InjectModeSwitch => {
             ctx.inject_mode = ctx.inject_mode.toggle();
-            log::info!("[Hotkey] Switched inject mode to: {}", ctx.inject_mode.as_str());
+            log::info!(
+                "[Hotkey] Switched inject mode to: {}",
+                ctx.inject_mode.as_str()
+            );
             let mut cfg = ctx.config_mgr.write();
             cfg.inject.mode = ctx.inject_mode.as_str().to_string();
             drop(cfg);
@@ -363,41 +368,41 @@ fn trigger_tts(ctx: &mut AppCtx) {
 
     // Get text according to selected mode
     let text = match mode {
-        TtsInputMode::Selection => {
-            match inject::text_reader::read_selected_text() {
-                Ok(t) if !t.is_empty() => {
-                    log::info!("Got {} chars from selection", t.len());
-                    t
-                }
-                Ok(_) => {
-                    log::error!("No text selected. Select text first or switch to Clipboard mode.");
-                    return;
-                }
-                Err(e) => {
-                    log::error!("Failed to read selection: {}", e);
-                    return;
-                }
+        TtsInputMode::Selection => match inject::text_reader::read_selected_text() {
+            Ok(t) if !t.is_empty() => {
+                log::info!("Got {} chars from selection", t.len());
+                t
             }
-        }
-        TtsInputMode::Clipboard => {
-            match inject::text_reader::read_clipboard_text() {
-                Ok(t) if !t.is_empty() => {
-                    log::info!("Got {} chars from clipboard", t.len());
-                    t
-                }
-                Ok(_) => {
-                    log::error!("Clipboard is empty.");
-                    return;
-                }
-                Err(e) => {
-                    log::error!("Failed to read clipboard: {}", e);
-                    return;
-                }
+            Ok(_) => {
+                log::error!("No text selected. Select text first or switch to Clipboard mode.");
+                return;
             }
-        }
+            Err(e) => {
+                log::error!("Failed to read selection: {}", e);
+                return;
+            }
+        },
+        TtsInputMode::Clipboard => match inject::text_reader::read_clipboard_text() {
+            Ok(t) if !t.is_empty() => {
+                log::info!("Got {} chars from clipboard", t.len());
+                t
+            }
+            Ok(_) => {
+                log::error!("Clipboard is empty.");
+                return;
+            }
+            Err(e) => {
+                log::error!("Failed to read clipboard: {}", e);
+                return;
+            }
+        },
     };
 
-    log::info!("TTS synthesizing with engine '{}': {} chars", ctx.tts_mgr.active_engine(), text.len());
+    log::info!(
+        "TTS synthesizing with engine '{}': {} chars",
+        ctx.tts_mgr.active_engine(),
+        text.len()
+    );
 
     // Synthesize on the shared runtime; play once ready. The event loop is
     // not blocked — this just spawns a task and returns.
@@ -479,7 +484,10 @@ fn stop_recording(ctx: &mut AppCtx) {
     };
 
     // Run ASR on the shared runtime without blocking the main loop.
-    log::info!("Running ASR with engine '{}'...", ctx.asr_mgr.active_engine());
+    log::info!(
+        "Running ASR with engine '{}'...",
+        ctx.asr_mgr.active_engine()
+    );
     let asr_ref = ctx.asr_mgr.clone();
     let asr_result_tx = ctx.asr_result_tx.clone();
     ctx.runtime.spawn(async move {
@@ -500,7 +508,11 @@ fn stop_recording(ctx: &mut AppCtx) {
 fn handle_asr_result(ctx: &mut AppCtx, result: AsrResult) {
     match result {
         AsrResult::Text(text) => {
-            log::info!("Injecting text ({} chars) via {:?}", text.len(), ctx.inject_mode);
+            log::info!(
+                "Injecting text ({} chars) via {:?}",
+                text.len(),
+                ctx.inject_mode
+            );
             if let Err(e) = inject_text(&text, ctx.inject_mode) {
                 log::error!("Text injection failed: {}", e);
             }
@@ -556,8 +568,14 @@ fn cmd_transcribe(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     let result = rt.block_on(asr_mgr.transcribe(&wav_bytes));
 
     match result {
-        Ok(text) => { println!("{}", text); Ok(()) }
-        Err(e) => { eprintln!("ASR failed: {}", e); std::process::exit(1); }
+        Ok(text) => {
+            println!("{}", text);
+            Ok(())
+        }
+        Err(e) => {
+            eprintln!("ASR failed: {}", e);
+            std::process::exit(1);
+        }
     }
 }
 
@@ -581,7 +599,9 @@ fn cmd_inject(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
                 };
             }
             s => {
-                if !text.is_empty() { text.push(' '); }
+                if !text.is_empty() {
+                    text.push(' ');
+                }
                 text.push_str(s);
             }
         }
@@ -626,15 +646,18 @@ fn cmd_tts(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn build_asr_manager(config_mgr: &ConfigManager) -> AsrManager {
-    use asr::whisper_local::WhisperLocalEngine;
-    use asr::whisper_cpp::WhisperCppEngine;
+    use asr::aliyun_asr::AliyunAsrEngine;
     use asr::mimo_asr::MimoAsrEngine;
     use asr::openai_asr::OpenaiAsrEngine;
-    use asr::aliyun_asr::AliyunAsrEngine;
+    use asr::whisper_cpp::WhisperCppEngine;
+    use asr::whisper_local::WhisperLocalEngine;
 
     let (primary_engine, fallback_engines) = {
         let cfg = config_mgr.read();
-        (cfg.asr.primary_engine.clone(), cfg.asr.fallback_engines.clone())
+        (
+            cfg.asr.primary_engine.clone(),
+            cfg.asr.fallback_engines.clone(),
+        )
     };
 
     let mut asr_mgr = AsrManager::new(primary_engine, fallback_engines);
@@ -645,7 +668,10 @@ fn build_asr_manager(config_mgr: &ConfigManager) -> AsrManager {
     {
         let cfg = config_mgr.read();
         let wcpp_cfg = &cfg.asr.whisper_cpp;
-        log::info!("Registering whisper.cpp ASR engine at {}", wcpp_cfg.base_url);
+        log::info!(
+            "Registering whisper.cpp ASR engine at {}",
+            wcpp_cfg.base_url
+        );
         asr_mgr.register(Box::new(WhisperCppEngine::new(&wcpp_cfg.base_url)));
     }
 
@@ -686,8 +712,16 @@ fn build_asr_manager(config_mgr: &ConfigManager) -> AsrManager {
         let cfg = config_mgr.read();
         let mimo_cfg = &cfg.asr.mimo;
         if !mimo_cfg.api_key.is_empty() {
-            log::info!("Registering Mimo ASR engine: {} at {}", mimo_cfg.model, mimo_cfg.base_url);
-            asr_mgr.register(Box::new(MimoAsrEngine::new(&mimo_cfg.base_url, &mimo_cfg.api_key, &mimo_cfg.model)));
+            log::info!(
+                "Registering Mimo ASR engine: {} at {}",
+                mimo_cfg.model,
+                mimo_cfg.base_url
+            );
+            asr_mgr.register(Box::new(MimoAsrEngine::new(
+                &mimo_cfg.base_url,
+                &mimo_cfg.api_key,
+                &mimo_cfg.model,
+            )));
         }
     }
 
@@ -696,7 +730,10 @@ fn build_asr_manager(config_mgr: &ConfigManager) -> AsrManager {
         let aliyun_cfg = &cfg.asr.aliyun;
         if !aliyun_cfg.appkey.is_empty() && !aliyun_cfg.token.is_empty() {
             log::info!("Registering Aliyun ASR engine");
-            asr_mgr.register(Box::new(AliyunAsrEngine::new(&aliyun_cfg.appkey, &aliyun_cfg.token)));
+            asr_mgr.register(Box::new(AliyunAsrEngine::new(
+                &aliyun_cfg.appkey,
+                &aliyun_cfg.token,
+            )));
         }
     }
 
@@ -709,9 +746,9 @@ fn build_asr_manager(config_mgr: &ConfigManager) -> AsrManager {
         let doubao_cfg = &cfg.asr.doubao;
         if !doubao_cfg.api_key.is_empty() {
             log::info!("Registering Doubao ASR engine (volc.seedasr.sauc.duration)");
-            asr_mgr.register(Box::new(
-                asr::doubao_asr::DoubaoAsrEngine::new(&doubao_cfg.api_key),
-            ));
+            asr_mgr.register(Box::new(asr::doubao_asr::DoubaoAsrEngine::new(
+                &doubao_cfg.api_key,
+            )));
             doubao_asr_registered = true;
         } else {
             log::info!("Doubao ASR engine skipped: no api_key configured");
@@ -749,7 +786,10 @@ fn build_tts_manager(config_mgr: &ConfigManager) -> TtsManager {
         let edge = &cfg.tts.edge;
         log::info!("Registering Edge TTS engine (voice={})", edge.voice);
         tts_mgr.register(Box::new(EdgeTtsEngine::new(
-            &edge.voice, &edge.rate, &edge.volume, &edge.pitch,
+            &edge.voice,
+            &edge.rate,
+            &edge.volume,
+            &edge.pitch,
         )));
     }
 
@@ -759,7 +799,11 @@ fn build_tts_manager(config_mgr: &ConfigManager) -> TtsManager {
         let mimo_cfg = &cfg.asr.mimo; // share base URL and API key with ASR
         let tts_cfg = &cfg.tts.mimo;
         if !mimo_cfg.api_key.is_empty() {
-            log::info!("Registering Mimo TTS engine: {} at {}", tts_cfg.model, mimo_cfg.base_url);
+            log::info!(
+                "Registering Mimo TTS engine: {} at {}",
+                tts_cfg.model,
+                mimo_cfg.base_url
+            );
             let engine = MimoTtsEngine::new(&mimo_cfg.base_url, &mimo_cfg.api_key, &tts_cfg.model);
             tts_mgr.register(Box::new(engine));
         }

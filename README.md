@@ -41,6 +41,12 @@
 
 - [Rust toolchain](https://rustup.rs/) 1.75+
 - A microphone and speakers/headphones
+- **Linux only:** global hotkeys need `/dev/uinput` write access. Add your
+  user to the `input` group (then log out and back in):
+  ```bash
+  sudo usermod -aG input $USER
+  ```
+  Or grant the device directly: `sudo chmod 0660 /dev/uinput`
 
 ### Build from source
 
@@ -302,6 +308,11 @@ MIT
 
 - [Rust 工具链](https://rustup.rs/) 1.75+
 - 麦克风和音箱/耳机
+- **仅 Linux：** 全局热键需要 `/dev/uinput` 写权限。将用户加入 `input` 组（然后重新登录）：
+  ```bash
+  sudo usermod -aG input $USER
+  ```
+  或直接授权设备：`sudo chmod 0660 /dev/uinput`
 
 ### 从源码编译
 

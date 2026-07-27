@@ -53,20 +53,28 @@ impl EdgeTtsEngine {
             } else {
                 voice.to_string()
             },
-            rate: if rate.is_empty() { "+0%".to_string() } else { rate.to_string() },
-            volume: if volume.is_empty() { "+0%".to_string() } else { volume.to_string() },
-            pitch: if pitch.is_empty() { "+0Hz".to_string() } else { pitch.to_string() },
+            rate: if rate.is_empty() {
+                "+0%".to_string()
+            } else {
+                rate.to_string()
+            },
+            volume: if volume.is_empty() {
+                "+0%".to_string()
+            } else {
+                volume.to_string()
+            },
+            pitch: if pitch.is_empty() {
+                "+0Hz".to_string()
+            } else {
+                pitch.to_string()
+            },
         }
     }
 
     /// Infer the `xml:lang` for the SSML speak element from the voice name
     /// (e.g. `zh-CN-XiaoxiaoNeural` → `zh-CN`).
     fn lang_for_voice(&self) -> String {
-        self.voice
-            .split('-')
-            .take(2)
-            .collect::<Vec<_>>()
-            .join("-")
+        self.voice.split('-').take(2).collect::<Vec<_>>().join("-")
     }
 
     /// Build the SSML document for the given text.
@@ -110,12 +118,13 @@ impl TtsEngine for EdgeTtsEngine {
         }
 
         let request = build_connect_request()?;
-        let (ws_stream, response) = connect_async(request)
-            .await
-            .map_err(|e| TtsError::EngineError {
-                engine: "edge-tts".into(),
-                message: format!("WebSocket connect failed: {}", e),
-            })?;
+        let (ws_stream, response) =
+            connect_async(request)
+                .await
+                .map_err(|e| TtsError::EngineError {
+                    engine: "edge-tts".into(),
+                    message: format!("WebSocket connect failed: {}", e),
+                })?;
         log::debug!("edge-tts WS handshake status: {}", response.status());
 
         let (mut write, mut read) = ws_stream.split();
@@ -134,12 +143,13 @@ impl TtsEngine for EdgeTtsEngine {
             ts = timestamp,
             fmt = AUDIO_OUTPUT_FORMAT,
         );
-        write.send(Message::Text(config_msg)).await.map_err(|e| {
-            TtsError::EngineError {
+        write
+            .send(Message::Text(config_msg))
+            .await
+            .map_err(|e| TtsError::EngineError {
                 engine: "edge-tts".into(),
                 message: format!("send config failed: {}", e),
-            }
-        })?;
+            })?;
 
         // 2. ssml message — the text to synthesize.
         let ssml = self.build_ssml(text);
@@ -153,12 +163,13 @@ impl TtsEngine for EdgeTtsEngine {
             ts = js_date_string(),
             ssml = ssml,
         );
-        write.send(Message::Text(ssml_msg)).await.map_err(|e| {
-            TtsError::EngineError {
+        write
+            .send(Message::Text(ssml_msg))
+            .await
+            .map_err(|e| TtsError::EngineError {
                 engine: "edge-tts".into(),
                 message: format!("send ssml failed: {}", e),
-            }
-        })?;
+            })?;
 
         // 3. Read frames until turn.end, accumulating audio bytes.
         let mut audio: Vec<u8> = Vec::new();
@@ -176,8 +187,7 @@ impl TtsEngine for EdgeTtsEngine {
                     if bin.len() < 2 {
                         continue;
                     }
-                    let header_len =
-                        u16::from_be_bytes([bin[0], bin[1]]) as usize;
+                    let header_len = u16::from_be_bytes([bin[0], bin[1]]) as usize;
                     let start = 2 + header_len;
                     if start <= bin.len() {
                         audio.extend_from_slice(&bin[start..]);
@@ -215,8 +225,7 @@ impl TtsEngine for EdgeTtsEngine {
 
 /// Build the WebSocket upgrade request with the required query parameters
 /// and headers (Sec-MS-GEC token, Origin, User-Agent, MUID cookie).
-fn build_connect_request(
-) -> Result<Request<()>, TtsError> {
+fn build_connect_request() -> Result<Request<()>, TtsError> {
     let gec = generate_sec_ms_gec();
     let url = format!(
         "wss://speech.platform.bing.com/consumer/speech/synthesize/readaloud/edge/v1\
@@ -273,7 +282,10 @@ fn generate_muid() -> String {
     hasher.update(now.to_le_bytes());
     hasher.update(b"vox-muid-salt");
     let hash = hasher.finalize();
-    hash.iter().take(16).map(|b| format!("{:02X}", b)).collect::<String>()
+    hash.iter()
+        .take(16)
+        .map(|b| format!("{:02X}", b))
+        .collect::<String>()
 }
 
 /// Generate the `Sec-MS-GEC` token.
@@ -303,7 +315,9 @@ fn generate_sec_ms_gec() -> String {
     hasher.update(format!("{}{}", ticks, TRUSTED_CLIENT_TOKEN).as_bytes());
     let hash = hasher.finalize();
     // Uppercase hex.
-    hash.iter().map(|b| format!("{:02X}", b)).collect::<String>()
+    hash.iter()
+        .map(|b| format!("{:02X}", b))
+        .collect::<String>()
 }
 
 /// A connection/request id — a UUID v4 without dashes (32 hex chars), like
@@ -321,7 +335,10 @@ fn connect_id() -> String {
     hasher.update(now.to_le_bytes());
     hasher.update(b"vox-rid-salt");
     let hash = hasher.finalize();
-    hash.iter().take(16).map(|b| format!("{:02x}", b)).collect::<String>()
+    hash.iter()
+        .take(16)
+        .map(|b| format!("{:02x}", b))
+        .collect::<String>()
 }
 
 /// Current UTC time as a JavaScript-style date string, e.g.
@@ -333,4 +350,53 @@ fn js_date_string() -> String {
     chrono::Utc::now()
         .format("%a %b %d %Y %H:%M:%S GMT+0000 (Coordinated Universal Time)")
         .to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_new_defaults_on_empty() {
+        let e = EdgeTtsEngine::new("", "", "", "");
+        assert_eq!(e.voice, "zh-CN-XiaoxiaoNeural");
+        assert_eq!(e.rate, "+0%");
+        assert_eq!(e.volume, "+0%");
+        assert_eq!(e.pitch, "+0Hz");
+    }
+
+    #[test]
+    fn test_new_keeps_provided_values() {
+        let e = EdgeTtsEngine::new("en-US-AriaNeural", "+10%", "+50%", "+5Hz");
+        assert_eq!(e.voice, "en-US-AriaNeural");
+        assert_eq!(e.rate, "+10%");
+    }
+
+    #[test]
+    fn test_lang_for_voice() {
+        let e = EdgeTtsEngine::new("zh-CN-XiaoxiaoNeural", "", "", "");
+        assert_eq!(e.lang_for_voice(), "zh-CN");
+
+        let e = EdgeTtsEngine::new("en-US-AriaNeural", "", "", "");
+        assert_eq!(e.lang_for_voice(), "en-US");
+    }
+
+    #[test]
+    fn test_build_ssml_structure() {
+        let e = EdgeTtsEngine::new("zh-CN-XiaoxiaoNeural", "+0%", "+0%", "+0Hz");
+        let ssml = e.build_ssml("hello");
+        assert!(ssml.contains("<speak"));
+        assert!(ssml.contains("xml:lang=\"zh-CN\""));
+        assert!(ssml.contains("name=\"zh-CN-XiaoxiaoNeural\""));
+        assert!(ssml.contains(">hello<"));
+    }
+
+    #[test]
+    fn test_build_ssml_escapes_xml() {
+        let e = EdgeTtsEngine::new("zh-CN-XiaoxiaoNeural", "", "", "");
+        let ssml = e.build_ssml("a & b < c > d");
+        // Special chars must be escaped so the SSML stays well-formed.
+        assert!(ssml.contains("a &amp; b &lt; c &gt; d"));
+        assert!(!ssml.contains("a & b < c > d"));
+    }
 }
