@@ -118,6 +118,7 @@ startup sequence, settings, CLI checks, and service ownership boundaries.
 | TTS trigger        | <kbd>Alt</kbd>+<kbd>T</kbd>                  | Read selected text (or clipboard) aloud              |
 | Translate text     | <kbd>Alt</kbd>+<kbd>R</kbd>                  | Translate selection/clipboard, then inject           |
 | Translate + TTS    | <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>R</kbd> | Translate selection/clipboard, then speak            |
+| Speech translate → text | <kbd>Alt</kbd>+<kbd>Ctrl</kbd>+<kbd>R</kbd> | Transcribe, translate with active route, then inject |
 | Raw speech → TTS   | <kbd>Alt</kbd>+<kbd>Ctrl</kbd>+<kbd>`</kbd>  | Transcribe speech and speak it without translation   |
 | Speech translate → TTS | <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>`</kbd> | Transcribe, translate with active route, then speak |
 | Switch voice       | <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>T</kbd> | Cycle named LongCat reference pairs                  |
@@ -143,8 +144,7 @@ Record Mode  ▸  Push-to-Talk (hold) / Toggle (press)                    (✓ a
 TTS Engine   ▸  edge-tts / mimo-tts                                      (✓ active)
 TTS Input    ▸  Selection (Ctrl+C) / Clipboard                           (✓ active)
 LongCat Voice ▸  any saved audio + transcript pair                        (✓ active)
-Translation Route ▸ Inbound / Outbound                                    (✓ active)
-Outbound Language ▸ English / Spanish / French / …                        (✓ active)
+Local Translation ▸ Enable / Inbound / Outbound / target language         (✓ active)
 ─────────────
 Toggle Recording
 Settings…
@@ -176,6 +176,7 @@ tts_trigger = "Alt+T"
 tts_voice_switch = "Alt+Shift+T"
 translate_text = "Alt+R"
 translate_tts = "Alt+Shift+R"
+record_translate_text = "Alt+Ctrl+R"
 record_tts = "Alt+Ctrl+`"
 record_translate_tts = "Alt+Shift+`"
 translate_route_switch = "Alt+Shift+L"

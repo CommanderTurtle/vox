@@ -46,6 +46,7 @@ enum AsrResult {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RecordingDestination {
     Inject,
+    TranslateAndInject,
     Speak,
     TranslateAndSpeak,
 }
@@ -125,6 +126,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         translate_text_binding,
         translate_tts_binding,
         record_translate_tts_binding,
+        record_translate_text_binding,
         record_tts_binding,
         translate_route_binding,
     ) = {
@@ -149,6 +151,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .expect("Invalid translate_tts hotkey config");
         let record_translate_tts = HotkeyBinding::parse(&cfg.hotkey.record_translate_tts)
             .expect("Invalid record_translate_tts hotkey config");
+        let record_translate_text = HotkeyBinding::parse(&cfg.hotkey.record_translate_text)
+            .expect("Invalid record_translate_text hotkey config");
         let record_tts =
             HotkeyBinding::parse(&cfg.hotkey.record_tts).expect("Invalid record_tts hotkey config");
         let translate_route = HotkeyBinding::parse(&cfg.hotkey.translate_route_switch)
@@ -162,6 +166,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             translate_text,
             translate_tts,
             record_translate_tts,
+            record_translate_text,
             record_tts,
             translate_route,
         )
@@ -215,6 +220,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         translate_text_binding,
         translate_tts_binding,
         record_translate_tts_binding,
+        record_translate_text_binding,
         record_tts_binding,
         translate_route_binding,
         hotkey_sender.clone(),
@@ -390,6 +396,19 @@ fn handle_tray_event(
             rebuild_tts_manager(ctx);
             push_tray(ctx, AppState::Idle);
         }
+        Ok(TrayEvent::SetTranslateEnabled(enabled)) => {
+            log::info!(
+                "{} local translation",
+                if enabled { "Enabling" } else { "Disabling" }
+            );
+            {
+                let mut cfg = ctx.config_mgr.write();
+                cfg.translate.enabled = enabled;
+            }
+            let _ = ctx.config_mgr.save();
+            ctx.translator = Arc::new(Translator::new(&ctx.config_mgr.read().translate));
+            push_tray(ctx, AppState::Idle);
+        }
         Ok(TrayEvent::SetTranslateRoute(route)) => {
             log::info!("Switching translation route to: {}", route);
             {
@@ -506,6 +525,12 @@ fn handle_hotkey_event(ctx: &mut AppCtx, event: HotkeyEvent) {
         }
         HotkeyEvent::RecordTranslateTtsPressed => {
             log::info!("[Hotkey] Speech → translation → TTS pressed");
+            if !ctx.translator.is_enabled() {
+                log::warn!(
+                    "Translation is disabled; enable Local Translation from the tray or Settings"
+                );
+                return;
+            }
             match ctx.record_mode {
                 RecordMode::PushToTalk => {
                     start_recording_for(ctx, RecordingDestination::TranslateAndSpeak)
@@ -522,6 +547,34 @@ fn handle_hotkey_event(ctx: &mut AppCtx, event: HotkeyEvent) {
         HotkeyEvent::RecordTranslateTtsReleased => {
             if ctx.record_mode == RecordMode::PushToTalk
                 && ctx.recording_destination == RecordingDestination::TranslateAndSpeak
+            {
+                stop_recording(ctx);
+            }
+        }
+        HotkeyEvent::RecordTranslateTextPressed => {
+            log::info!("[Hotkey] Speech → translation → text pressed");
+            if !ctx.translator.is_enabled() {
+                log::warn!(
+                    "Translation is disabled; enable Local Translation from the tray or Settings"
+                );
+                return;
+            }
+            match ctx.record_mode {
+                RecordMode::PushToTalk => {
+                    start_recording_for(ctx, RecordingDestination::TranslateAndInject)
+                }
+                RecordMode::Toggle => {
+                    if ctx.capture.is_some() {
+                        stop_recording(ctx);
+                    } else {
+                        start_recording_for(ctx, RecordingDestination::TranslateAndInject);
+                    }
+                }
+            }
+        }
+        HotkeyEvent::RecordTranslateTextReleased => {
+            if ctx.record_mode == RecordMode::PushToTalk
+                && ctx.recording_destination == RecordingDestination::TranslateAndInject
             {
                 stop_recording(ctx);
             }
@@ -766,6 +819,7 @@ fn stop_recording(ctx: &mut AppCtx) {
                 log::info!("ASR result: {} chars", text.len());
                 let must_translate = match destination {
                     RecordingDestination::Inject => translator.translates_asr(),
+                    RecordingDestination::TranslateAndInject => true,
                     RecordingDestination::Speak => false,
                     RecordingDestination::TranslateAndSpeak => true,
                 };
@@ -804,6 +858,16 @@ fn handle_asr_result(ctx: &mut AppCtx, result: AsrResult) {
                 );
                 if let Err(e) = inject_text(&text, ctx.inject_mode) {
                     log::error!("Text injection failed: {}", e);
+                }
+            }
+            RecordingDestination::TranslateAndInject => {
+                log::info!(
+                    "Injecting translated text ({} chars) via {:?}",
+                    text.len(),
+                    ctx.inject_mode
+                );
+                if let Err(e) = inject_text(&text, ctx.inject_mode) {
+                    log::error!("Translated text injection failed: {}", e);
                 }
             }
             RecordingDestination::TranslateAndSpeak => speak_text(ctx, text, false),

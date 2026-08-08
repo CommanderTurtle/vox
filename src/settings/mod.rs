@@ -11,22 +11,44 @@ use eframe::egui;
 
 use crate::config::Config;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SettingsPage {
+    Translation,
+    Hotkeys,
+    SpeechInput,
+    SpeechOutput,
+    General,
+}
+
 /// Spawn the settings window in a new thread.
 ///
 /// `initial` is the current config snapshot to edit. `save_tx` receives the
 /// edited snapshot when the user saves, so the backend can persist + apply it.
 pub fn spawn_settings_window(initial: Config, save_tx: crossbeam::channel::Sender<Config>) {
     std::thread::spawn(move || {
-        let options = eframe::NativeOptions {
+        let mut options = eframe::NativeOptions {
             viewport: egui::ViewportBuilder::default()
                 .with_inner_size([620.0, 720.0])
                 .with_resizable(true),
             ..Default::default()
         };
 
+        // Vox owns its tray/message pump on the process main thread and the
+        // settings window intentionally lives on a worker thread. Winit
+        // rejects that topology on Windows unless the platform's explicit
+        // any-thread event-loop contract is enabled.
+        #[cfg(target_os = "windows")]
+        {
+            options.event_loop_builder = Some(Box::new(|builder| {
+                use winit::platform::windows::EventLoopBuilderExtWindows;
+                builder.with_any_thread(true);
+            }));
+        }
+
         let app = SettingsApp {
             config: initial,
             save_tx,
+            page: SettingsPage::Translation,
         };
 
         if let Err(e) =
@@ -44,35 +66,50 @@ pub fn spawn_settings_window(initial: Config, save_tx: crossbeam::channel::Sende
 struct SettingsApp {
     config: Config,
     save_tx: crossbeam::channel::Sender<Config>,
+    page: SettingsPage,
 }
 
 impl eframe::App for SettingsApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         egui::CentralPanel::default().show_inside(ui, |ui| {
-            egui::ScrollArea::vertical().show(ui, |ui| {
-                ui.heading("vox Settings");
-                ui.separator();
-                ui.add_space(8.0);
-
-                self.render_hotkeys(ui);
-                self.render_asr(ui);
-                self.render_inject(ui);
-                self.render_tts(ui);
-                self.render_translate(ui);
-                self.render_general(ui);
-
-                ui.separator();
-                ui.horizontal(|ui| {
-                    if ui.button("💾 Save && Close").clicked() {
-                        // Hand the edited snapshot to the backend; it owns
-                        // persistence and live application.
-                        let _ = self.save_tx.send(self.config.clone());
-                        ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+            ui.heading("vox Settings");
+            ui.horizontal_wrapped(|ui| {
+                for (page, label) in [
+                    (SettingsPage::Translation, "Translation & flows"),
+                    (SettingsPage::Hotkeys, "Hotkeys"),
+                    (SettingsPage::SpeechInput, "Speech input"),
+                    (SettingsPage::SpeechOutput, "Speech output"),
+                    (SettingsPage::General, "General"),
+                ] {
+                    ui.selectable_value(&mut self.page, page, label);
+                }
+            });
+            ui.separator();
+            let content_height = (ui.available_height() - 44.0).max(160.0);
+            egui::ScrollArea::vertical()
+                .auto_shrink([false, false])
+                .max_height(content_height)
+                .show(ui, |ui| match self.page {
+                    SettingsPage::Translation => self.render_translate(ui),
+                    SettingsPage::Hotkeys => self.render_hotkeys(ui),
+                    SettingsPage::SpeechInput => {
+                        self.render_inject(ui);
+                        self.render_asr(ui);
                     }
-                    if ui.button("✕ Cancel").clicked() {
-                        ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
-                    }
+                    SettingsPage::SpeechOutput => self.render_tts(ui),
+                    SettingsPage::General => self.render_general(ui),
                 });
+            ui.separator();
+            ui.horizontal(|ui| {
+                if ui.button("💾 Save && Close").clicked() {
+                    // Hand the edited snapshot to the backend; it owns
+                    // persistence and live application.
+                    let _ = self.save_tx.send(self.config.clone());
+                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+                }
+                if ui.button("✕ Cancel").clicked() {
+                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+                }
             });
         });
     }
@@ -127,6 +164,12 @@ impl SettingsApp {
             ui.label("Speech → TTS:  ");
             ui.add(egui::TextEdit::singleline(
                 &mut self.config.hotkey.record_translate_tts,
+            ));
+        });
+        ui.horizontal(|ui| {
+            ui.label("Speech → translated text:");
+            ui.add(egui::TextEdit::singleline(
+                &mut self.config.hotkey.record_translate_text,
             ));
         });
         ui.horizontal(|ui| {
@@ -559,11 +602,22 @@ impl SettingsApp {
     }
 
     fn render_translate(&mut self, ui: &mut egui::Ui) {
-        ui.label(egui::RichText::new("Local Translation").strong());
-        ui.checkbox(&mut self.config.translate.enabled, "Enable translation");
-        ui.horizontal(|ui| {
-            ui.checkbox(&mut self.config.translate.asr, "ASR → injection");
-            ui.checkbox(&mut self.config.translate.tts, "TTS input → speech");
+        ui.heading("Local Translation");
+        ui.label("One local translator is composed natively with Vox input, injection, and speech. No cloud fallback and no parallel workflow engine.");
+        ui.add_space(6.0);
+        ui.checkbox(
+            &mut self.config.translate.enabled,
+            "Enable the local translation backend",
+        );
+        ui.horizontal_wrapped(|ui| {
+            ui.label("Backend:");
+            ui.monospace(&self.config.translate.base_url);
+            if ui.button("Use local default").clicked() {
+                self.config.translate.base_url = "http://127.0.0.1:8176/v1".to_string();
+                self.config.translate.api_key.clear();
+                self.config.translate.model.clear();
+                self.config.translate.max_tokens = 256;
+            }
         });
         ui.horizontal(|ui| {
             ui.label("Base URL:");
@@ -579,6 +633,24 @@ impl SettingsApp {
             ui.label("Max tokens:");
             ui.add(egui::DragValue::new(&mut self.config.translate.max_tokens).range(16..=4096));
         });
+        ui.label(egui::RichText::new("A blank model discovers the model advertised by the configured local /models endpoint.").small());
+        ui.add_space(10.0);
+
+        ui.label(egui::RichText::new("Default behavior of the ordinary hotkeys").strong());
+        ui.horizontal_wrapped(|ui| {
+            ui.checkbox(
+                &mut self.config.translate.asr,
+                "Record hotkey translates before text injection",
+            );
+            ui.checkbox(
+                &mut self.config.translate.tts,
+                "TTS hotkey translates before speech",
+            );
+        });
+        ui.label(egui::RichText::new("The dedicated translation hotkeys below remain explicit; these two switches only compose translation into the ordinary record and TTS actions.").small());
+        ui.add_space(10.0);
+
+        ui.label(egui::RichText::new("Active language route").strong());
         egui::ComboBox::from_label("Active route")
             .selected_text(&self.config.translate.active_route)
             .show_ui(ui, |ui| {
@@ -593,62 +665,140 @@ impl SettingsApp {
                     "Outbound: English → selected language",
                 );
             });
-        ui.horizontal(|ui| {
-            ui.label("Inbound:");
-            ui.add(
-                egui::TextEdit::singleline(&mut self.config.translate.inbound.source_language)
-                    .hint_text("auto"),
-            );
-            ui.label("→");
-            ui.add(egui::TextEdit::singleline(
-                &mut self.config.translate.inbound.target_language,
-            ));
-        });
-        ui.horizontal(|ui| {
-            ui.label("Outbound:");
-            ui.add(egui::TextEdit::singleline(
-                &mut self.config.translate.outbound.source_language,
-            ));
-            ui.label("→");
-            egui::ComboBox::from_id_salt("outbound_target_language")
-                .selected_text(&self.config.translate.outbound.target_language)
-                .show_ui(ui, |ui| {
-                    for language in [
-                        "English",
-                        "Spanish",
-                        "French",
-                        "German",
-                        "Italian",
-                        "Portuguese",
-                        "Chinese",
-                        "Japanese",
-                        "Korean",
-                        "Arabic",
-                        "Hindi",
-                        "Russian",
-                        "Dutch",
-                        "Polish",
-                        "Turkish",
-                        "Vietnamese",
-                        "Thai",
-                        "Indonesian",
-                    ] {
-                        ui.selectable_value(
-                            &mut self.config.translate.outbound.target_language,
-                            language.to_string(),
-                            language,
-                        );
-                    }
-                });
-            ui.add(
-                egui::TextEdit::singleline(&mut self.config.translate.outbound.target_language)
-                    .hint_text("or type any language"),
-            );
-        });
+        Self::render_language_route(ui, "inbound", "Inbound", &mut self.config.translate.inbound);
+        Self::render_language_route(
+            ui,
+            "outbound",
+            "Outbound",
+            &mut self.config.translate.outbound,
+        );
+        ui.add_space(10.0);
+
+        ui.label(egui::RichText::new("Native workflow hotkeys").strong());
+        egui::Grid::new("translation_flow_matrix")
+            .striped(true)
+            .num_columns(2)
+            .show(ui, |ui| {
+                for (flow, key) in [
+                    ("Speech → text", self.config.hotkey.record_toggle.as_str()),
+                    (
+                        "Speech → translate → text",
+                        self.config.hotkey.record_translate_text.as_str(),
+                    ),
+                    (
+                        "Text → translate → text",
+                        self.config.hotkey.translate_text.as_str(),
+                    ),
+                    ("Text → TTS", self.config.hotkey.tts_trigger.as_str()),
+                    (
+                        "Text → translate → TTS",
+                        self.config.hotkey.translate_tts.as_str(),
+                    ),
+                    ("Speech → TTS", self.config.hotkey.record_tts.as_str()),
+                    (
+                        "Speech → translate → TTS",
+                        self.config.hotkey.record_translate_tts.as_str(),
+                    ),
+                ] {
+                    ui.label(flow);
+                    ui.monospace(key);
+                    ui.end_row();
+                }
+            });
+        ui.label(format!(
+            "Switch inbound/outbound route: {}",
+            self.config.hotkey.translate_route_switch
+        ));
+        ui.add_space(10.0);
+
         ui.label("System prompt:");
         ui.add(egui::TextEdit::multiline(&mut self.config.translate.system_prompt).desired_rows(3));
-        ui.label(egui::RichText::new("Default: the standalone local translation service on port 8176. Blank model auto-selects its advertised model. No cloud fallback.").small());
+        ui.label(egui::RichText::new("The translator is instructed to emit only the translated text. Source text is delimited as data, not instructions.").small());
         ui.add_space(12.0);
+    }
+
+    fn render_language_route(
+        ui: &mut egui::Ui,
+        id: &str,
+        label: &str,
+        route: &mut crate::config::TranslateRouteConfig,
+    ) {
+        ui.group(|ui| {
+            ui.label(egui::RichText::new(label).strong());
+
+            let mut source_mode = if route.source_language.eq_ignore_ascii_case("auto") {
+                0
+            } else {
+                1
+            };
+            ui.horizontal_wrapped(|ui| {
+                ui.label("Source:");
+                ui.radio_value(&mut source_mode, 0, "Detect automatically");
+                ui.radio_value(&mut source_mode, 1, "Selected language");
+                if source_mode == 0 {
+                    route.source_language = "auto".to_string();
+                } else {
+                    if route.source_language.eq_ignore_ascii_case("auto") {
+                        route.source_language = "English".to_string();
+                    }
+                    ui.add(
+                        egui::TextEdit::singleline(&mut route.source_language).desired_width(150.0),
+                    );
+                }
+            });
+
+            let mut target_mode = if route.target_language.eq_ignore_ascii_case("English") {
+                0
+            } else {
+                1
+            };
+            ui.horizontal_wrapped(|ui| {
+                ui.label("Target:");
+                ui.radio_value(&mut target_mode, 0, "English");
+                ui.radio_value(&mut target_mode, 1, "Selected language");
+                if target_mode == 0 {
+                    route.target_language = "English".to_string();
+                } else {
+                    if route.target_language.eq_ignore_ascii_case("English") {
+                        route.target_language = "Spanish".to_string();
+                    }
+                    egui::ComboBox::from_id_salt(format!("{id}-target-list"))
+                        .selected_text(&route.target_language)
+                        .show_ui(ui, |ui| {
+                            for language in [
+                                "Spanish",
+                                "French",
+                                "German",
+                                "Italian",
+                                "Portuguese",
+                                "Chinese",
+                                "Japanese",
+                                "Korean",
+                                "Arabic",
+                                "Hindi",
+                                "Russian",
+                                "Dutch",
+                                "Polish",
+                                "Turkish",
+                                "Vietnamese",
+                                "Thai",
+                                "Indonesian",
+                            ] {
+                                ui.selectable_value(
+                                    &mut route.target_language,
+                                    language.to_string(),
+                                    language,
+                                );
+                            }
+                        });
+                    ui.add(
+                        egui::TextEdit::singleline(&mut route.target_language)
+                            .desired_width(150.0)
+                            .hint_text("or type any language"),
+                    );
+                }
+            });
+        });
     }
 
     fn render_general(&mut self, ui: &mut egui::Ui) {

@@ -7,6 +7,7 @@ tts_voice_switch = "Alt+Shift+T"
 translate_text = "Alt+R"
 translate_tts = "Alt+Shift+R"
 record_translate_tts = "Alt+Shift+`"
+record_translate_text = "Alt+Ctrl+R"
 record_tts = "Alt+Ctrl+`"
 translate_route_switch = "Alt+Shift+L"
 

@@ -42,6 +42,8 @@ pub struct HotkeyConfig {
     pub translate_tts: String,
     #[serde(default = "default_record_translate_tts")]
     pub record_translate_tts: String,
+    #[serde(default = "default_record_translate_text")]
+    pub record_translate_text: String,
     #[serde(default = "default_record_tts")]
     pub record_tts: String,
     #[serde(default = "default_translate_route_switch")]
@@ -59,6 +61,9 @@ fn default_translate_tts() -> String {
 }
 fn default_record_translate_tts() -> String {
     "Alt+Shift+`".to_string()
+}
+fn default_record_translate_text() -> String {
+    "Alt+Ctrl+R".to_string()
 }
 fn default_record_tts() -> String {
     "Alt+Ctrl+`".to_string()

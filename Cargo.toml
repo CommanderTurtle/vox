@@ -76,6 +76,7 @@ egui = "0.34"
 # winit emits "platform not supported" at compile time. Both are enabled so
 # the binary works under either session; the active one is chosen at runtime.
 eframe = { version = "0.34", default-features = false, features = ["default_fonts", "glow", "x11", "wayland"] }
+winit = { version = "0.30", default-features = false }
 # Feature flags
 [features]
 default = ["cloud-asr"]

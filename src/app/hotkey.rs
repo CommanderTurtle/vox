@@ -32,6 +32,10 @@ pub enum HotkeyEvent {
     RecordTranslateTtsPressed,
     /// End the speech → ASR → translation → TTS workflow.
     RecordTranslateTtsReleased,
+    /// Begin the speech → ASR → translation → injected-text workflow.
+    RecordTranslateTextPressed,
+    /// End the speech → ASR → translation → injected-text workflow.
+    RecordTranslateTextReleased,
     /// Begin a raw speech → ASR → TTS workflow without translation.
     RecordTtsPressed,
     /// End a raw speech → ASR → TTS workflow without translation.
@@ -155,6 +159,7 @@ pub fn start_hotkey_listener(
     translate_text_binding: HotkeyBinding,
     translate_tts_binding: HotkeyBinding,
     record_translate_tts_binding: HotkeyBinding,
+    record_translate_text_binding: HotkeyBinding,
     record_tts_binding: HotkeyBinding,
     translate_route_binding: HotkeyBinding,
     sender: crossbeam::channel::Sender<HotkeyEvent>,
@@ -173,6 +178,7 @@ pub fn start_hotkey_listener(
         let mut translate_text_was_pressed = false;
         let mut translate_tts_was_pressed = false;
         let mut record_translate_tts_was_pressed = false;
+        let mut record_translate_text_was_pressed = false;
         let mut record_tts_was_pressed = false;
         let mut translate_route_was_pressed = false;
 
@@ -233,6 +239,13 @@ pub fn start_hotkey_listener(
                         let _ = sender.send(HotkeyEvent::RecordTranslateTtsPressed);
                     }
 
+                    if record_translate_text_binding.matches(&pressed, &key)
+                        && !record_translate_text_was_pressed
+                    {
+                        record_translate_text_was_pressed = true;
+                        let _ = sender.send(HotkeyEvent::RecordTranslateTextPressed);
+                    }
+
                     if record_tts_binding.matches(&pressed, &key) && !record_tts_was_pressed {
                         record_tts_was_pressed = true;
                         let _ = sender.send(HotkeyEvent::RecordTtsPressed);
@@ -280,6 +293,12 @@ pub fn start_hotkey_listener(
                             let _ = sender.send(HotkeyEvent::RecordTranslateTtsReleased);
                         }
                         record_translate_tts_was_pressed = false;
+                    }
+                    if key == record_translate_text_binding.key {
+                        if record_translate_text_was_pressed {
+                            let _ = sender.send(HotkeyEvent::RecordTranslateTextReleased);
+                        }
+                        record_translate_text_was_pressed = false;
                     }
                     if key == record_tts_binding.key {
                         if record_tts_was_pressed {

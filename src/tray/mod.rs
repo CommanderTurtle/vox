@@ -30,6 +30,7 @@ pub enum TrayEvent {
     SetTtsEngine(String),
     SetTtsInputMode(String),
     SetTtsVoiceProfile(String),
+    SetTranslateEnabled(bool),
     SetTranslateRoute(String),
     SetTranslateTarget(String),
     SetCrisperMode(String),
@@ -88,6 +89,7 @@ impl MenuModel {
 const ID_TOGGLE: &str = "toggle";
 const ID_SETTINGS: &str = "settings";
 const ID_QUIT: &str = "quit";
+const ID_TRANSLATE_ENABLED: &str = "translate-enabled";
 
 fn asr_id(name: &str) -> String {
     format!("asr:{}", name)
@@ -233,53 +235,61 @@ fn build_menu(m: &MenuModel) -> Menu {
         let _ = menu.append(&voice_menu);
     }
 
-    if m.translate_enabled {
-        let translate_menu = Submenu::new("Translation Route", true);
-        for (route, label) in [
-            ("inbound", "Inbound: detect/source → English"),
-            ("outbound", "Outbound: English → selected language"),
-        ] {
-            let _ = translate_menu.append(&CheckMenuItem::with_id(
-                translate_route_id(route),
-                label,
-                true,
-                route == m.translate_route,
-                None,
-            ));
-        }
-        let _ = menu.append(&translate_menu);
-
-        let target_menu = Submenu::new("Outbound Language", true);
-        for language in [
-            "English",
-            "Spanish",
-            "French",
-            "German",
-            "Italian",
-            "Portuguese",
-            "Chinese",
-            "Japanese",
-            "Korean",
-            "Arabic",
-            "Hindi",
-            "Russian",
-            "Dutch",
-            "Polish",
-            "Turkish",
-            "Vietnamese",
-            "Thai",
-            "Indonesian",
-        ] {
-            let _ = target_menu.append(&CheckMenuItem::with_id(
-                translate_target_id(language),
-                language,
-                true,
-                language.eq_ignore_ascii_case(&m.translate_target),
-                None,
-            ));
-        }
-        let _ = menu.append(&target_menu);
+    // Translation stays visible even while disabled so a first-run user can
+    // discover and configure the local backend without editing TOML.
+    let translation_menu = Submenu::new("Local Translation", true);
+    let _ = translation_menu.append(&CheckMenuItem::with_id(
+        ID_TRANSLATE_ENABLED,
+        "Enable local translation",
+        true,
+        m.translate_enabled,
+        None,
+    ));
+    let _ = translation_menu.append(&PredefinedMenuItem::separator());
+    for (route, label) in [
+        ("inbound", "Inbound: detect/source → English"),
+        ("outbound", "Outbound: English → selected language"),
+    ] {
+        let _ = translation_menu.append(&CheckMenuItem::with_id(
+            translate_route_id(route),
+            label,
+            true,
+            route == m.translate_route,
+            None,
+        ));
     }
+
+    let target_menu = Submenu::new("Outbound target", true);
+    for language in [
+        "English",
+        "Spanish",
+        "French",
+        "German",
+        "Italian",
+        "Portuguese",
+        "Chinese",
+        "Japanese",
+        "Korean",
+        "Arabic",
+        "Hindi",
+        "Russian",
+        "Dutch",
+        "Polish",
+        "Turkish",
+        "Vietnamese",
+        "Thai",
+        "Indonesian",
+    ] {
+        let _ = target_menu.append(&CheckMenuItem::with_id(
+            translate_target_id(language),
+            language,
+            true,
+            language.eq_ignore_ascii_case(&m.translate_target),
+            None,
+        ));
+    }
+    let _ = translation_menu.append(&target_menu);
+    let _ = menu.append(&translation_menu);
 
     let _ = menu.append(&PredefinedMenuItem::separator());
 
@@ -306,6 +316,9 @@ fn map_event(id: &str, model: &MenuModel) -> Option<TrayEvent> {
     }
     if id == ID_TOGGLE {
         return Some(TrayEvent::ToggleRecording);
+    }
+    if id == ID_TRANSLATE_ENABLED {
+        return Some(TrayEvent::SetTranslateEnabled(!model.translate_enabled));
     }
     if let Some(name) = id.strip_prefix("asr:") {
         if model.asr_engines.iter().any(|e| e == name) {

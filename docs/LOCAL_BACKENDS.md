@@ -210,6 +210,14 @@ Dedicated hotkeys select raw versus translated TTS. The normal record and TTS
 hotkeys keep the existing `translate.asr` and `translate.tts` switches for
 users who prefer translation to be their default path.
 
+All seven compositions are first-class desktop actions. In particular,
+`Alt+Ctrl+R` is the dedicated speech → active translation route → injected
+text action; it does not depend on the ordinary record hotkey's `translate.asr`
+preference. Translation is always visible in the tray, including on first run,
+where it can be enabled and its active route/target selected. Settings opens on
+the dedicated Translation & flows page instead of burying the backend below
+the ASR and TTS forms.
+
 When `model` is blank, Vox selects the first model advertised by the
 configured `/models` route and caches that choice for the process lifetime.
 The bounded completion length keeps short speech translations brief. Source
