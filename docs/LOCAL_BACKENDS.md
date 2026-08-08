@@ -239,16 +239,20 @@ uses as its microphone.
 
 If `--list-devices` shows only ordinary speakers/headphones, Windows has no
 virtual microphone path available yet. The Rust router cannot create a Windows
-audio driver from user space. Install or enable a virtual cable, rerun
-`--list-devices`, and then rerun `--init-config`. Selecting headphones or
-speakers is useful only for monitoring/testing and does not create a selectable
-microphone.
+audio driver from user space. Build the repository's native Microsoft-SysVAD
+component in `windows-native-audio-cable`, sign its catalog with the component's
+ephemeral Administrator/SYSTEM-only machine key, boot the separate Vox Driver
+Test entry once, install the signed development package, rerun `--list-devices`,
+and then rerun `--init-config`. Selecting
+headphones or speakers is useful only for monitoring/testing and does not
+create a selectable microphone. Stereo Mix is also not a substitute: it is a
+capture/loopback endpoint rather than a writable playback sink.
 
 The generated file is equivalent to:
 
 ```toml
 bind = "127.0.0.1:8182"
-output_device = "CABLE Input"
+output_device = "Vox Cable Input"
 system_audio_enabled = true
 system_audio_device = "default"
 system_audio_sample_rate = 16000
@@ -269,6 +273,7 @@ M4A media posted to
 `POST /v1/forward`, and renders the result to `output_device`. For a virtual
 microphone, this must be the playback side of an installed virtual cable;
 choose that cable's capture side as the Windows/application microphone. The
+native Vox pair is **Vox Cable Input** and **Vox Cable Output**, respectively.
 physical mic remains an ordinary, live input to the mix.
 
 Running the router normally opens its small native control window. Paste or

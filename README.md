@@ -73,6 +73,14 @@ the physical input microphone and the virtual-cable output and writes the
 executable-local TOML automatically. `--list-devices` marks Windows defaults
 and warns when no virtual audio endpoint is installed.
 
+Vox includes an optional first-party `windows-native-audio-cable` component
+for that missing endpoint. It reproducibly adapts Microsoft's pinned SysVAD
+sample into **Vox Cable Input** (playback) and **Vox Cable Output** (recording),
+without installing a third-party cable implementation. Its WDK build,
+ephemeral machine-key catalog signing, and isolated one-time test-boot
+instructions live in
+[`windows-native-audio-cable/README.md`](windows-native-audio-cable/README.md).
+
 The private backend-only gateway is an equally optional workspace member. It
 shares CrisperWhisper and LongCat behavior with desktop Vox without pulling in
 the tray, hotkeys, clipboard, GUI, capture, or device dependencies:

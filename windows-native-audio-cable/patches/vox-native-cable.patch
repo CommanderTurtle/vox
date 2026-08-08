@@ -1,0 +1,536 @@
+diff --git a/audio/sysvad/EndpointsCommon/EndpointsCommon.vcxproj b/audio/sysvad/EndpointsCommon/EndpointsCommon.vcxproj
+index c1ba8b14fecc295d0b2cac8cde1772ccb2efd1d8..15f8b8400a9b5e041228b8825c555b0170a6a43c 100644
+--- a/audio/sysvad/EndpointsCommon/EndpointsCommon.vcxproj
++++ b/audio/sysvad/EndpointsCommon/EndpointsCommon.vcxproj
+@@ -194,6 +194,7 @@
+     <ClCompile Include="usbhsmictopo.cpp" />
+     <ClCompile Include="usbhsspeakertopo.cpp" />
+     <ClCompile Include="usbhstopo.cpp" />
++    <ClCompile Include="voxcable.cpp" />
+   </ItemGroup>
+   <ItemGroup>
+     <Inf Exclude="@(Inf)" Include="*.inf" />
+@@ -208,4 +209,4 @@
+     <ClInclude Exclude="@(ClInclude)" Include="*.h;*.hpp;*.hxx;*.hm;*.inl;*.xsd" />
+   </ItemGroup>
+   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+-</Project>
+\ No newline at end of file
++</Project>
+diff --git a/audio/sysvad/EndpointsCommon/minwavertstream.cpp b/audio/sysvad/EndpointsCommon/minwavertstream.cpp
+index adea0c824c0830fd213fd2f7061160e7f111c556..6d28e2062d0432210e8c20e191734b8a1493662b 100644
+--- a/audio/sysvad/EndpointsCommon/minwavertstream.cpp
++++ b/audio/sysvad/EndpointsCommon/minwavertstream.cpp
+@@ -6,6 +6,7 @@
+ #include "minwavertstream.h"
+ #include "UnittestData.h"
+ #include "AudioModuleHelper.h"
++#include "voxcable.h"
+ #define MINWAVERTSTREAM_POOLTAG 'SRWM'
+ 
+ #pragma warning (disable : 4127)
+@@ -1469,11 +1470,8 @@ VOID CMiniportWaveRTStream::UpdatePosition
+                                         0);
+         }
+ 
+-        if (!g_DoNotCreateDataFiles)
+-        {
+-            // Read from buffer and write to a file.
+-            ReadBytes(ByteDisplacement);
+-        }
++        // Forward rendered PCM into the native Vox capture endpoint.
++        ReadBytes(ByteDisplacement);
+     }
+     
+     // Increment the DMA position by the number of bytes displaced since the last
+@@ -1502,7 +1500,7 @@ VOID CMiniportWaveRTStream::WriteBytes
+ 
+ Routine Description:
+ 
+-This function writes the audio buffer using a sine wave generator
++This function fills the capture buffer with PCM from the Vox render endpoint.
+ Arguments:
+ 
+ ByteDisplacement - # of bytes to process.
+@@ -1515,10 +1513,10 @@ ByteDisplacement - # of bytes to process.
+     // many bytes have been displaced then this may loops many times.
+     while (ByteDisplacement > 0)
+     {
+-        ULONG runWrite = min(ByteDisplacement, m_ulDmaBufferSize - bufferOffset);
+-            m_ToneGenerator.GenerateSine(m_pDmaBuffer + bufferOffset, runWrite);
+-        bufferOffset = (bufferOffset + runWrite) % m_ulDmaBufferSize;
+-        ByteDisplacement -= runWrite;
++        ULONG runRead = min(ByteDisplacement, m_ulDmaBufferSize - bufferOffset);
++        VoxCableRead(m_pDmaBuffer + bufferOffset, runRead);
++        bufferOffset = (bufferOffset + runRead) % m_ulDmaBufferSize;
++        ByteDisplacement -= runRead;
+     }
+ }
+ 
+@@ -1532,7 +1530,7 @@ VOID CMiniportWaveRTStream::ReadBytes
+ 
+ Routine Description:
+ 
+-This function reads the audio buffer and saves the data in a file.
++This function forwards rendered PCM into the native Vox cable ring.
+ 
+ Arguments:
+ 
+@@ -1546,10 +1544,10 @@ ByteDisplacement - # of bytes to process.
+     // many bytes have been displaced then this may loops many times.
+     while (ByteDisplacement > 0)
+     {
+-        ULONG runWrite = min(ByteDisplacement, m_ulDmaBufferSize - bufferOffset);
+-        m_SaveData.WriteData(m_pDmaBuffer + bufferOffset, runWrite);
+-        bufferOffset = (bufferOffset + runWrite) % m_ulDmaBufferSize;
+-        ByteDisplacement -= runWrite;
++        ULONG runRead = min(ByteDisplacement, m_ulDmaBufferSize - bufferOffset);
++        VoxCableWrite(m_pDmaBuffer + bufferOffset, runRead);
++        bufferOffset = (bufferOffset + runRead) % m_ulDmaBufferSize;
++        ByteDisplacement -= runRead;
+     }
+ }
+ 
+diff --git a/audio/sysvad/EndpointsCommon/speakerwavtable.h b/audio/sysvad/EndpointsCommon/speakerwavtable.h
+index 6fb058abc90ed261169ff94dbf24d64aa1f8cc1c..1d30c33279e5987b37cf2ef92537815c4efc01e4 100644
+--- a/audio/sysvad/EndpointsCommon/speakerwavtable.h
++++ b/audio/sysvad/EndpointsCommon/speakerwavtable.h
+@@ -26,8 +26,8 @@ Abstract:
+ #define SPEAKER_HOST_MAX_CHANNELS                   2       // Max Channels.
+ #define SPEAKER_HOST_MIN_BITS_PER_SAMPLE            16      // Min Bits Per Sample
+ #define SPEAKER_HOST_MAX_BITS_PER_SAMPLE            16      // Max Bits Per Sample
+-#define SPEAKER_HOST_MIN_SAMPLE_RATE                24000   // Min Sample Rate
+-#define SPEAKER_HOST_MAX_SAMPLE_RATE                96000   // Max Sample Rate
++#define SPEAKER_HOST_MIN_SAMPLE_RATE                48000   // Min Sample Rate
++#define SPEAKER_HOST_MAX_SAMPLE_RATE                48000   // Max Sample Rate
+ 
+ #define SPEAKER_OFFLOAD_MAX_CHANNELS                2       // Max Channels.
+ #define SPEAKER_OFFLOAD_MIN_BITS_PER_SAMPLE         16      // Min Bits Per Sample
+@@ -50,10 +50,51 @@ Abstract:
+ //
+ // Max # of pin instances.
+ //
+-#define SPEAKER_MAX_INPUT_SYSTEM_STREAMS            6
++#define SPEAKER_MAX_INPUT_SYSTEM_STREAMS            1
+ #define SPEAKER_MAX_INPUT_OFFLOAD_STREAMS           MAX_INPUT_OFFLOAD_STREAMS
+ #define SPEAKER_MAX_OUTPUT_LOOPBACK_STREAMS         MAX_OUTPUT_LOOPBACK_STREAMS
+ 
++static
++KSDATAFORMAT_WAVEFORMATEXTENSIBLE VoxCableRenderFormats[] =
++{
++    {
++        {
++            sizeof(KSDATAFORMAT_WAVEFORMATEXTENSIBLE),
++            0,
++            0,
++            0,
++            STATICGUIDOF(KSDATAFORMAT_TYPE_AUDIO),
++            STATICGUIDOF(KSDATAFORMAT_SUBTYPE_PCM),
++            STATICGUIDOF(KSDATAFORMAT_SPECIFIER_WAVEFORMATEX)
++        },
++        {
++            {
++                WAVE_FORMAT_EXTENSIBLE,
++                VOX_CABLE_CHANNELS,
++                VOX_CABLE_SAMPLE_RATE,
++                VOX_CABLE_SAMPLE_RATE * VOX_CABLE_BYTES_PER_FRAME,
++                VOX_CABLE_BYTES_PER_FRAME,
++                VOX_CABLE_BITS_PER_SAMPLE,
++                sizeof(WAVEFORMATEXTENSIBLE) - sizeof(WAVEFORMATEX)
++            },
++            VOX_CABLE_BITS_PER_SAMPLE,
++            KSAUDIO_SPEAKER_STEREO,
++            STATICGUIDOF(KSDATAFORMAT_SUBTYPE_PCM)
++        }
++    }
++};
++
++static
++MODE_AND_DEFAULT_FORMAT VoxCableRenderModes[] =
++{
++    { STATIC_AUDIO_SIGNALPROCESSINGMODE_RAW,            &VoxCableRenderFormats[0].DataFormat },
++    { STATIC_AUDIO_SIGNALPROCESSINGMODE_DEFAULT,        &VoxCableRenderFormats[0].DataFormat },
++    { STATIC_AUDIO_SIGNALPROCESSINGMODE_MEDIA,          &VoxCableRenderFormats[0].DataFormat },
++    { STATIC_AUDIO_SIGNALPROCESSINGMODE_MOVIE,          &VoxCableRenderFormats[0].DataFormat },
++    { STATIC_AUDIO_SIGNALPROCESSINGMODE_COMMUNICATIONS, &VoxCableRenderFormats[0].DataFormat },
++    { STATIC_AUDIO_SIGNALPROCESSINGMODE_NOTIFICATION,   &VoxCableRenderFormats[0].DataFormat }
++};
++
+ //=============================================================================
+ static 
+ KSDATAFORMAT_WAVEFORMATEXTENSIBLE SpeakerAudioEngineSupportedDeviceFormats[] =
+@@ -449,10 +490,10 @@ PIN_DEVICE_FORMATS_AND_MODES SpeakerPinDeviceFormatsAndModes[] =
+ {
+     {
+         SystemRenderPin,
+-        SpeakerHostPinSupportedDeviceFormats,
+-        SIZEOF_ARRAY(SpeakerHostPinSupportedDeviceFormats),
+-        SpeakerHostPinSupportedDeviceModes,
+-        SIZEOF_ARRAY(SpeakerHostPinSupportedDeviceModes)
++        VoxCableRenderFormats,
++        SIZEOF_ARRAY(VoxCableRenderFormats),
++        VoxCableRenderModes,
++        SIZEOF_ARRAY(VoxCableRenderModes)
+     },
+     {
+         OffloadRenderPin,
+@@ -463,8 +504,8 @@ PIN_DEVICE_FORMATS_AND_MODES SpeakerPinDeviceFormatsAndModes[] =
+     },
+     {
+         RenderLoopbackPin,
+-        SpeakerHostPinSupportedDeviceFormats,  // Must support all the formats supported by host pin
+-        SIZEOF_ARRAY(SpeakerHostPinSupportedDeviceFormats),
++        VoxCableRenderFormats,
++        SIZEOF_ARRAY(VoxCableRenderFormats),
+         NULL,   // loopback doesn't support modes.
+         0
+     },
+@@ -477,8 +518,8 @@ PIN_DEVICE_FORMATS_AND_MODES SpeakerPinDeviceFormatsAndModes[] =
+     },
+     {
+         NoPin,      // For convenience, offload engine device formats appended here
+-        SpeakerAudioEngineSupportedDeviceFormats,
+-        SIZEOF_ARRAY(SpeakerAudioEngineSupportedDeviceFormats),
++        VoxCableRenderFormats,
++        SIZEOF_ARRAY(VoxCableRenderFormats),
+         NULL,       // no modes for this entry.
+         0
+     }
+diff --git a/audio/sysvad/EndpointsCommon/voxcable.cpp b/audio/sysvad/EndpointsCommon/voxcable.cpp
+new file mode 100644
+index 0000000000000000000000000000000000000000..969a9799695aa58d2670a002619747b36ef833e0
+--- /dev/null
++++ b/audio/sysvad/EndpointsCommon/voxcable.cpp
+@@ -0,0 +1,132 @@
++#include "voxcable.h"
++
++// 100 ms of canonical 48 kHz, stereo, signed 16-bit PCM. Overflow drops the
++// oldest samples so live audio remains live; underrun is explicit silence.
++#define VOX_CABLE_BUFFER_BYTES \
++    (VOX_CABLE_SAMPLE_RATE * VOX_CABLE_BYTES_PER_FRAME / 10)
++#define VOX_CABLE_POOL_TAG 'CxoV'
++
++static BYTE*      g_VoxCableBuffer = nullptr;
++static ULONG      g_VoxCableReadOffset = 0;
++static ULONG      g_VoxCableWriteOffset = 0;
++static ULONG      g_VoxCableAvailable = 0;
++static KSPIN_LOCK g_VoxCableLock;
++
++_IRQL_requires_max_(PASSIVE_LEVEL)
++NTSTATUS VoxCableInitialize()
++{
++    if (g_VoxCableBuffer != nullptr)
++    {
++        return STATUS_SUCCESS;
++    }
++
++    KeInitializeSpinLock(&g_VoxCableLock);
++    g_VoxCableBuffer = static_cast<BYTE*>(ExAllocatePool2(
++        POOL_FLAG_NON_PAGED,
++        VOX_CABLE_BUFFER_BYTES,
++        VOX_CABLE_POOL_TAG));
++
++    if (g_VoxCableBuffer == nullptr)
++    {
++        return STATUS_INSUFFICIENT_RESOURCES;
++    }
++
++    RtlZeroMemory(g_VoxCableBuffer, VOX_CABLE_BUFFER_BYTES);
++    g_VoxCableReadOffset = 0;
++    g_VoxCableWriteOffset = 0;
++    g_VoxCableAvailable = 0;
++    return STATUS_SUCCESS;
++}
++
++_IRQL_requires_max_(PASSIVE_LEVEL)
++VOID VoxCableShutdown()
++{
++    BYTE* buffer = g_VoxCableBuffer;
++    g_VoxCableBuffer = nullptr;
++    g_VoxCableReadOffset = 0;
++    g_VoxCableWriteOffset = 0;
++    g_VoxCableAvailable = 0;
++
++    if (buffer != nullptr)
++    {
++        ExFreePoolWithTag(buffer, VOX_CABLE_POOL_TAG);
++    }
++}
++
++_IRQL_requires_max_(DISPATCH_LEVEL)
++VOID VoxCableWrite(_In_reads_bytes_(ByteCount) const BYTE* Source, _In_ ULONG ByteCount)
++{
++    if (Source == nullptr || ByteCount == 0 || g_VoxCableBuffer == nullptr)
++    {
++        return;
++    }
++
++    // If a single write exceeds capacity, retain only its newest audio.
++    if (ByteCount >= VOX_CABLE_BUFFER_BYTES)
++    {
++        Source += ByteCount - VOX_CABLE_BUFFER_BYTES;
++        ByteCount = VOX_CABLE_BUFFER_BYTES;
++    }
++
++    KIRQL oldIrql;
++    KeAcquireSpinLock(&g_VoxCableLock, &oldIrql);
++
++    const ULONG overflow =
++        (g_VoxCableAvailable + ByteCount > VOX_CABLE_BUFFER_BYTES)
++            ? (g_VoxCableAvailable + ByteCount - VOX_CABLE_BUFFER_BYTES)
++            : 0;
++    if (overflow > 0)
++    {
++        g_VoxCableReadOffset =
++            (g_VoxCableReadOffset + overflow) % VOX_CABLE_BUFFER_BYTES;
++        g_VoxCableAvailable -= overflow;
++    }
++
++    const ULONG first = min(ByteCount, VOX_CABLE_BUFFER_BYTES - g_VoxCableWriteOffset);
++    RtlCopyMemory(g_VoxCableBuffer + g_VoxCableWriteOffset, Source, first);
++    if (ByteCount > first)
++    {
++        RtlCopyMemory(g_VoxCableBuffer, Source + first, ByteCount - first);
++    }
++
++    g_VoxCableWriteOffset =
++        (g_VoxCableWriteOffset + ByteCount) % VOX_CABLE_BUFFER_BYTES;
++    g_VoxCableAvailable += ByteCount;
++    KeReleaseSpinLock(&g_VoxCableLock, oldIrql);
++}
++
++_IRQL_requires_max_(DISPATCH_LEVEL)
++VOID VoxCableRead(_Out_writes_bytes_(ByteCount) BYTE* Destination, _In_ ULONG ByteCount)
++{
++    if (Destination == nullptr || ByteCount == 0)
++    {
++        return;
++    }
++
++    if (g_VoxCableBuffer == nullptr)
++    {
++        RtlZeroMemory(Destination, ByteCount);
++        return;
++    }
++
++    KIRQL oldIrql;
++    KeAcquireSpinLock(&g_VoxCableLock, &oldIrql);
++
++    const ULONG available = min(ByteCount, g_VoxCableAvailable);
++    const ULONG first = min(available, VOX_CABLE_BUFFER_BYTES - g_VoxCableReadOffset);
++    RtlCopyMemory(Destination, g_VoxCableBuffer + g_VoxCableReadOffset, first);
++    if (available > first)
++    {
++        RtlCopyMemory(Destination + first, g_VoxCableBuffer, available - first);
++    }
++
++    g_VoxCableReadOffset =
++        (g_VoxCableReadOffset + available) % VOX_CABLE_BUFFER_BYTES;
++    g_VoxCableAvailable -= available;
++    KeReleaseSpinLock(&g_VoxCableLock, oldIrql);
++
++    if (available < ByteCount)
++    {
++        RtlZeroMemory(Destination + available, ByteCount - available);
++    }
++}
+diff --git a/audio/sysvad/EndpointsCommon/voxcable.h b/audio/sysvad/EndpointsCommon/voxcable.h
+new file mode 100644
+index 0000000000000000000000000000000000000000..91c08259382d409da1d22a300b617f9361f58e38
+--- /dev/null
++++ b/audio/sysvad/EndpointsCommon/voxcable.h
+@@ -0,0 +1,23 @@
++#pragma once
++
++#include <ntddk.h>
++
++// The Windows Audio Engine performs any application-side conversion. Both
++// Vox endpoints expose this one shared format to keep the kernel bridge a
++// deterministic byte-for-byte PCM transport.
++#define VOX_CABLE_SAMPLE_RATE       48000
++#define VOX_CABLE_CHANNELS          2
++#define VOX_CABLE_BITS_PER_SAMPLE   16
++#define VOX_CABLE_BYTES_PER_FRAME   4
++
++_IRQL_requires_max_(PASSIVE_LEVEL)
++NTSTATUS VoxCableInitialize();
++
++_IRQL_requires_max_(PASSIVE_LEVEL)
++VOID VoxCableShutdown();
++
++_IRQL_requires_max_(DISPATCH_LEVEL)
++VOID VoxCableWrite(_In_reads_bytes_(ByteCount) const BYTE* Source, _In_ ULONG ByteCount);
++
++_IRQL_requires_max_(DISPATCH_LEVEL)
++VOID VoxCableRead(_Out_writes_bytes_(ByteCount) BYTE* Destination, _In_ ULONG ByteCount);
+diff --git a/audio/sysvad/TabletAudioSample/micinwavtable.h b/audio/sysvad/TabletAudioSample/micinwavtable.h
+index 64acba00c0c6887f3b5b12538a2eb3d17c278495..c9ddcb7b43ae1af104ca9575024bba75eafde4e2 100644
+--- a/audio/sysvad/TabletAudioSample/micinwavtable.h
++++ b/audio/sysvad/TabletAudioSample/micinwavtable.h
+@@ -18,16 +18,46 @@ Abstract:
+ //
+ // Mic in (external: headphone) range.
+ //
+-#define MICIN_DEVICE_MAX_CHANNELS           1       // Max Channels.
++#define MICIN_DEVICE_MAX_CHANNELS           2       // Max Channels.
+ #define MICIN_MIN_BITS_PER_SAMPLE_PCM       16      // Min Bits Per Sample
+ #define MICIN_MAX_BITS_PER_SAMPLE_PCM       16      // Max Bits Per Sample
+-#define MICIN_MIN_SAMPLE_RATE               8000    // Min Sample Rate
++#define MICIN_MIN_SAMPLE_RATE               48000   // Min Sample Rate
+ #define MICIN_MAX_SAMPLE_RATE               48000   // Max Sample Rate
+ 
+ //
+ // Max # of pin instances.
+ //
+-#define MICIN_MAX_INPUT_STREAMS             5
++#define MICIN_MAX_INPUT_STREAMS             1
++
++static
++KSDATAFORMAT_WAVEFORMATEXTENSIBLE VoxCableCaptureFormats[] =
++{
++    {
++        {
++            sizeof(KSDATAFORMAT_WAVEFORMATEXTENSIBLE),
++            0,
++            0,
++            0,
++            STATICGUIDOF(KSDATAFORMAT_TYPE_AUDIO),
++            STATICGUIDOF(KSDATAFORMAT_SUBTYPE_PCM),
++            STATICGUIDOF(KSDATAFORMAT_SPECIFIER_WAVEFORMATEX)
++        },
++        {
++            {
++                WAVE_FORMAT_EXTENSIBLE,
++                VOX_CABLE_CHANNELS,
++                VOX_CABLE_SAMPLE_RATE,
++                VOX_CABLE_SAMPLE_RATE * VOX_CABLE_BYTES_PER_FRAME,
++                VOX_CABLE_BYTES_PER_FRAME,
++                VOX_CABLE_BITS_PER_SAMPLE,
++                sizeof(WAVEFORMATEXTENSIBLE) - sizeof(WAVEFORMATEX)
++            },
++            VOX_CABLE_BITS_PER_SAMPLE,
++            KSAUDIO_SPEAKER_STEREO,
++            STATICGUIDOF(KSDATAFORMAT_SUBTYPE_PCM)
++        }
++    }
++};
+ 
+ //=============================================================================
+ static 
+@@ -243,23 +273,23 @@ MODE_AND_DEFAULT_FORMAT MicInPinSupportedDeviceModes[] =
+ {
+     {
+         STATIC_AUDIO_SIGNALPROCESSINGMODE_RAW,
+-        &MicInPinSupportedDeviceFormats[SIZEOF_ARRAY(MicInPinSupportedDeviceFormats) - 1].DataFormat,
++        &VoxCableCaptureFormats[0].DataFormat,
+     },
+     {
+         STATIC_AUDIO_SIGNALPROCESSINGMODE_DEFAULT,
+-        &MicInPinSupportedDeviceFormats[SIZEOF_ARRAY(MicInPinSupportedDeviceFormats) - 1].DataFormat,
++        &VoxCableCaptureFormats[0].DataFormat,
+     },
+     {
+         STATIC_AUDIO_SIGNALPROCESSINGMODE_SPEECH,
+-        &MicInPinSupportedDeviceFormats[2].DataFormat, // 16KHz
++        &VoxCableCaptureFormats[0].DataFormat,
+     },
+     {
+         STATIC_AUDIO_SIGNALPROCESSINGMODE_COMMUNICATIONS,
+-        &MicInPinSupportedDeviceFormats[4].DataFormat, // 24KHz
++        &VoxCableCaptureFormats[0].DataFormat,
+     },
+     {
+         STATIC_AUDIO_SIGNALPROCESSINGMODE_FAR_FIELD_SPEECH,
+-        &MicInPinSupportedDeviceFormats[2].DataFormat, // 16KHz
++        &VoxCableCaptureFormats[0].DataFormat,
+     },
+ };
+ 
+@@ -278,8 +308,8 @@ PIN_DEVICE_FORMATS_AND_MODES MicInPinDeviceFormatsAndModes[] =
+     },
+     {
+         SystemCapturePin,
+-        MicInPinSupportedDeviceFormats,
+-        SIZEOF_ARRAY(MicInPinSupportedDeviceFormats),
++        VoxCableCaptureFormats,
++        SIZEOF_ARRAY(VoxCableCaptureFormats),
+         MicInPinSupportedDeviceModes,
+         SIZEOF_ARRAY(MicInPinSupportedDeviceModes)
+     }
+diff --git a/audio/sysvad/TabletAudioSample/minipairs.h b/audio/sysvad/TabletAudioSample/minipairs.h
+index 0d00f5a549b8d92befb5df6bffdef92ea27c483a..5dec7b9459383f2d494d0398cc4bdf4be0fa3c43 100644
+--- a/audio/sysvad/TabletAudioSample/minipairs.h
++++ b/audio/sysvad/TabletAudioSample/minipairs.h
+@@ -180,7 +180,7 @@ ENDPOINT_MINIPAIR SpeakerMiniports =
+     SIZEOF_ARRAY(SpeakerPinDeviceFormatsAndModes),
+     SpeakerTopologyPhysicalConnections,
+     SIZEOF_ARRAY(SpeakerTopologyPhysicalConnections),
+-    ENDPOINT_OFFLOAD_SUPPORTED,
++    ENDPOINT_NO_FLAGS,
+     SpeakerModulesWaveFilter, 
+     SIZEOF_ARRAY(SpeakerModulesWaveFilter),
+     &SpeakerModuleNotificationDeviceId,
+@@ -510,9 +510,6 @@ static
+ PENDPOINT_MINIPAIR  g_RenderEndpoints[] = 
+ {
+     &SpeakerMiniports,
+-    &SpeakerHpMiniports,
+-    &HdmiMiniports,
+-    &SpdifMiniports,
+ };
+ 
+ #define g_cRenderEndpoints  (SIZEOF_ARRAY(g_RenderEndpoints))
+@@ -525,9 +522,6 @@ static
+ PENDPOINT_MINIPAIR  g_CaptureEndpoints[] = 
+ {
+     &MicInMiniports,
+-    &MicArray1Miniports,
+-    &MicArray2Miniports,
+-    &MicArray3Miniports,
+ };
+ 
+ #define g_cCaptureEndpoints (SIZEOF_ARRAY(g_CaptureEndpoints))
+diff --git a/audio/sysvad/adapter.cpp b/audio/sysvad/adapter.cpp
+index 0f44c593f0e636b5cd17d00aa1054c64caae6d6d..3c6309da8fd4067fd3ffbf9bb282dabf1c684e9e 100644
+--- a/audio/sysvad/adapter.cpp
++++ b/audio/sysvad/adapter.cpp
+@@ -23,6 +23,7 @@ Abstract:
+ #include <sysvad.h>
+ #include <ContosoKeywordDetector.h>
+ #include "IHVPrivatePropertySet.h"
++#include "voxcable.h"
+ 
+ #include "simple.h"
+ #include "minipairs.h"
+@@ -341,6 +342,8 @@ Environment:
+         gPCDriverUnloadRoutine(DriverObject);
+     }
+ 
++    VoxCableShutdown();
++
+     //
+     // Unload WDF driver object. 
+     //
+@@ -567,6 +570,12 @@ Return Value:
+         DPF(D_ERROR, ("Registry Configuration error 0x%x", ntStatus)),
+         Done);
+ 
++    ntStatus = VoxCableInitialize();
++    IF_FAILED_ACTION_JUMP(
++        ntStatus,
++        DPF(D_ERROR, ("Vox cable initialization failed, 0x%x", ntStatus)),
++        Done);
++
+     //
+     // Tell the class driver to initialize the driver.
+     //
+@@ -604,6 +613,7 @@ Done:
+         }
+ 
+         ReleaseRegistryStringBuffer();
++        VoxCableShutdown();
+     }
+     
+     return ntStatus;
+
+
