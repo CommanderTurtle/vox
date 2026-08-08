@@ -127,7 +127,8 @@ The script requests UAC elevation, so an ordinary non-administrator account is
 prompted for the separate administrator account's credentials. It then:
 
 1. builds through the installed Visual Studio/WDK;
-2. enables `TESTSIGNING` on the current boot entry;
+2. queries the running kernel's Code Integrity flags, checks the current BCD
+   entry, and enables `TESTSIGNING` only when it is absent;
 3. signs the package with the ephemeral machine signer described below;
 4. installs the root audio device; and
 5. destroys every Vox private signing key before returning.
@@ -138,7 +139,10 @@ old Vox public certificates are removed and exactly one current public
 verification certificate remains. The script never changes local-group
 membership, never exports a PFX, and never reboots automatically.
 
-When it prints **installation finished**, restart Windows at your convenience.
+The script verifies that BCDEdit actually stored the setting before it creates
+the signer. It also reports the independent UEFI Secure Boot state. When it
+prints **installation finished**, a reboot is required if Test Mode was not
+already active; otherwise it is optional unless device installation requests it.
 Test Mode stays enabled because Windows must continue accepting the
 self-signed driver on later boots. If you eventually disable it with
 `bcdedit /set testsigning off`, this development driver will no longer load.
