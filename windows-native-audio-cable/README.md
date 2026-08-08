@@ -57,7 +57,60 @@ touches a certificate store.
 
 Use `build.ps1 -Refresh` only when you intentionally want to discard and regenerate the private `.work` tree. It never touches the Vox source tree outside this component.
 
-## Package-specific test signing
+## Preferred: Microsoft-attested package
+
+The WireGuard-style lifecycle is a pre-signed driver plus a UAC-elevated
+installer. UAC does not sign or attest a driver; it only authorizes installation
+of a package that already satisfies kernel policy. Windows Hello and TPM device
+attestation likewise prove a user/device identity, not driver-publisher trust.
+
+For the normal Secure Boot path with no Test Mode and normally no reboot:
+
+1. Register for Microsoft's Hardware Developer Program and associate the
+   required EV code-signing certificate with that account.
+2. Build the Hardware Dev Center CAB:
+
+   ```powershell
+   .\prepare-attestation.ps1
+   ```
+
+   This rebuilds with `SignMode=Off`, gathers the INF, binaries, catalog, and
+   matching PDB symbols, and creates
+   `dist\attestation\VoxNativeAudioCable.cab`. Files live below the required
+   `VoxCable` subfolder rather than at the CAB root.
+3. Sign the submission CAB with the EV certificate owned by the administrator
+   account or its hardware token:
+
+   ```powershell
+   .\sign-attestation-cab.ps1 -CertificateThumbprint '<EV thumbprint>'
+   ```
+
+   When launched by a standard user, the script requests UAC credentials and
+   runs only the signing operation under the administrator account. It creates,
+   imports, exports, and deletes no certificate. The EV key remains governed by
+   its existing hardware-token/HSM provider.
+4. Submit that CAB in Partner Center. Microsoft replaces the catalog with a
+   Microsoft SHA-2 catalog and appends Microsoft signatures to the binaries.
+5. Extract the returned signed package beneath `dist\attested`, then run from
+   the normal account:
+
+   ```powershell
+   .\install-attested.ps1
+   ```
+
+   The installer requests UAC elevation, verifies the catalog and every SYS
+   against Windows kernel policy, and creates the root audio device with the
+   WDK's DevCon. It never changes a certificate store or boot policy. It does
+   not request a reboot; if Windows exceptionally returns `3010`, it reports
+   that fact instead of restarting automatically.
+
+Microsoft's current attestation workflow is for test audiences and requires an
+EV certificate plus Hardware Dashboard registration. For public retail
+distribution, use WHCP/HLK certification. Neither an OEM UEFI CA, a Windows
+Hello key, nor a successful device-health attestation event substitutes for
+that publisher enrollment.
+
+## Offline fallback: package-specific test signing
 
 Do not disable driver-signature enforcement. Do not give a normal user a
 driver-signing key. This component instead uses a one-operation machine signer:
