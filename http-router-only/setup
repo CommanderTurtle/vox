@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+cd "$ROOT"
+
+command -v cargo >/dev/null 2>&1 || {
+  printf 'Rust/Cargo is required. Install it using your normal native Rust toolchain.\n' >&2
+  exit 1
+}
+
+CARGO_TARGET_DIR="$ROOT/target" \
+  cargo build --manifest-path "$ROOT/Cargo.toml" --release --locked --bin vox-http
+printf 'Built %s/target/release/vox-http\n' "$ROOT"
+printf 'Run ./starthttp.sh; the first run creates target/release/config.toml beside the binary.\n'

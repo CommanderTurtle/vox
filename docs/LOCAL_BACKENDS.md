@@ -11,6 +11,12 @@ Windows Vox
         +-- HTTP --> LongCat in WSL (voice-cloned WAV)
 ```
 
+For non-desktop consumers, the same repository contains the optional
+`http-router-only` Cargo member. It exposes the composed private API without
+tray, hotkey, clipboard, capture, GUI, or device dependencies. Desktop Vox and
+the HTTP member share `crates/vox-local-core`, so Crisper request parsing and
+LongCat sentence-aware concatenation cannot drift between them.
+
 Vox is the cross-platform client. Windows is the preferred daily target for
 global Alt hotkeys, native mouse/cursor behavior, the tray, and playback. WSL
 hosts the heavyweight model processes. Neither `~/multimedia/whisper` nor
@@ -70,6 +76,21 @@ Invoke-RestMethod -Method Post http://alien.local:8172/api/unload
 Invoke-RestMethod -Method Post http://alien.local:8230/api/unload
 Invoke-RestMethod -Method Post http://alien.local:8176/unload
 ```
+
+To expose those already-running backends to LAN applications without starting
+desktop Vox:
+
+```bash
+cd ~/multimedia/vox/http-router-only
+./setup
+./starthttp.sh
+```
+
+The gateway never starts, loads, unloads, or stops a model. Its portable
+configuration is created beside its binary at
+`http-router-only/target/release/config.toml`; see
+[`http-router-only/README.md`](../http-router-only/README.md) for the complete
+route contract.
 
 All three checked-in runtime environments set Hugging Face/Transformers
 offline mode plus `HF_HUB_DISABLE_TELEMETRY=1` and `DO_NOT_TRACK=1`. No Vox

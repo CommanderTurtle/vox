@@ -68,6 +68,19 @@ part of an ordinary Vox build:
 cargo build --release --features mic-forwarder --bin vox-mic-forwarder
 ```
 
+The private backend-only gateway is an equally optional workspace member. It
+shares CrisperWhisper and LongCat behavior with desktop Vox without pulling in
+the tray, hotkeys, clipboard, GUI, capture, or device dependencies:
+
+```bash
+cd http-router-only
+./setup
+./starthttp.sh
+```
+
+Its first launch creates `http-router-only/target/release/config.toml` beside
+the binary. See [HTTP router documentation](http-router-only/README.md).
+
 ### Quick start
 
 ```bash

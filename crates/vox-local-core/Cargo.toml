@@ -1,0 +1,12 @@
+[package]
+name = "vox-local-core"
+version = "0.1.0"
+edition = "2021"
+description = "Shared private backend clients for Vox desktop and HTTP routing"
+license = "MIT"
+
+[dependencies]
+hound = "3"
+reqwest = { version = "0.12", default-features = false, features = ["multipart"] }
+serde_json = "1"
+thiserror = "2"

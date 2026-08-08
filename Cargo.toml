@@ -1,3 +1,8 @@
+[workspace]
+members = ["crates/vox-local-core", "http-router-only"]
+default-members = ["."]
+resolver = "2"
+
 [package]
 name = "vox"
 version = "0.1.2"
@@ -26,6 +31,7 @@ arboard = "3"
 
 # HTTP client (for cloud ASR APIs)
 reqwest = { version = "0.12", features = ["json", "multipart", "stream"] }
+vox-local-core = { path = "crates/vox-local-core" }
 
 # WebSocket client (for Microsoft Edge TTS, no API key required)
 tokio-tungstenite = { version = "0.23", features = ["rustls-tls-native-roots"] }

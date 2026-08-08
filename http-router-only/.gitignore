@@ -1,0 +1,6 @@
+/target/
+/config.toml
+*.wav
+*.mp3
+*.m4a
+.env

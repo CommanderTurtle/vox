@@ -1,0 +1,24 @@
+[package]
+name = "vox-http-router"
+version = "0.1.0"
+edition = "2021"
+description = "Private HTTP orchestration for CrisperWhisper, local translation, and LongCat TTS"
+license = "MIT"
+
+[[bin]]
+name = "vox-http"
+path = "src/main.rs"
+
+[dependencies]
+axum = { version = "0.8", features = ["multipart"] }
+base64 = "0.22"
+reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "fs"] }
+toml = "0.9"
+tower-http = { version = "0.6", features = ["cors", "trace"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+vox-local-core = { path = "../crates/vox-local-core" }
