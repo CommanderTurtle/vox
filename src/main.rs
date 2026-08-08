@@ -131,7 +131,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         inject_switch_binding,
         tts_binding,
         tts_voice_binding,
-        tts_seed_binding,
+        tts_seed_increment_binding,
+        tts_seed_decrement_binding,
         translate_text_binding,
         translate_tts_binding,
         record_translate_tts_binding,
@@ -154,8 +155,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let tts = HotkeyBinding::parse(tts_str).expect("Invalid tts_trigger hotkey config");
         let voice = HotkeyBinding::parse(&cfg.hotkey.tts_voice_switch)
             .expect("Invalid tts_voice_switch hotkey config");
-        let seed = HotkeyBinding::parse(&cfg.hotkey.tts_seed_increment)
+        let seed_increment = HotkeyBinding::parse(&cfg.hotkey.tts_seed_increment)
             .expect("Invalid tts_seed_increment hotkey config");
+        let seed_decrement = HotkeyBinding::parse(&cfg.hotkey.tts_seed_decrement)
+            .expect("Invalid tts_seed_decrement hotkey config");
         let translate_text = HotkeyBinding::parse(&cfg.hotkey.translate_text)
             .expect("Invalid translate_text hotkey config");
         let translate_tts = HotkeyBinding::parse(&cfg.hotkey.translate_tts)
@@ -174,7 +177,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             inject,
             tts,
             voice,
-            seed,
+            seed_increment,
+            seed_decrement,
             translate_text,
             translate_tts,
             record_translate_tts,
@@ -235,7 +239,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         inject_switch_binding,
         tts_binding,
         tts_voice_binding,
-        tts_seed_binding,
+        tts_seed_increment_binding,
+        tts_seed_decrement_binding,
         translate_text_binding,
         translate_tts_binding,
         record_translate_tts_binding,
@@ -615,6 +620,17 @@ fn handle_hotkey_event(ctx: &mut AppCtx, event: HotkeyEvent) {
             let seed = {
                 let mut cfg = ctx.config_mgr.write();
                 cfg.tts.longcat.seed = cfg.tts.longcat.seed.saturating_add(1);
+                cfg.tts.longcat.seed
+            };
+            log::info!("[Hotkey] LongCat seed: {}", seed);
+            let _ = ctx.config_mgr.save();
+            rebuild_tts_manager(ctx);
+            push_tray(ctx, AppState::Idle);
+        }
+        HotkeyEvent::TtsSeedDecrement => {
+            let seed = {
+                let mut cfg = ctx.config_mgr.write();
+                cfg.tts.longcat.seed = cfg.tts.longcat.seed.saturating_sub(1);
                 cfg.tts.longcat.seed
             };
             log::info!("[Hotkey] LongCat seed: {}", seed);

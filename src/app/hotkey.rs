@@ -26,6 +26,8 @@ pub enum HotkeyEvent {
     TtsVoiceSwitch,
     /// Increment the LongCat synthesis seed by one.
     TtsSeedIncrement,
+    /// Decrement the LongCat synthesis seed by one.
+    TtsSeedDecrement,
     /// Translate selected/clipboard text with the active route and inject it.
     TranslateText,
     /// Translate selected/clipboard text with the active route and speak it.
@@ -158,7 +160,8 @@ pub fn start_hotkey_listener(
     inject_switch_binding: HotkeyBinding,
     tts_binding: HotkeyBinding,
     tts_voice_binding: HotkeyBinding,
-    tts_seed_binding: HotkeyBinding,
+    tts_seed_increment_binding: HotkeyBinding,
+    tts_seed_decrement_binding: HotkeyBinding,
     translate_text_binding: HotkeyBinding,
     translate_tts_binding: HotkeyBinding,
     record_translate_tts_binding: HotkeyBinding,
@@ -178,7 +181,8 @@ pub fn start_hotkey_listener(
         let mut inject_was_pressed = false;
         let mut tts_was_pressed = false;
         let mut tts_voice_was_pressed = false;
-        let mut tts_seed_was_pressed = false;
+        let mut tts_seed_increment_was_pressed = false;
+        let mut tts_seed_decrement_was_pressed = false;
         let mut translate_text_was_pressed = false;
         let mut translate_tts_was_pressed = false;
         let mut record_translate_tts_was_pressed = false;
@@ -225,9 +229,18 @@ pub fn start_hotkey_listener(
                         let _ = sender.send(HotkeyEvent::TtsVoiceSwitch);
                     }
 
-                    if tts_seed_binding.matches(&pressed, &key) && !tts_seed_was_pressed {
-                        tts_seed_was_pressed = true;
+                    if tts_seed_increment_binding.matches(&pressed, &key)
+                        && !tts_seed_increment_was_pressed
+                    {
+                        tts_seed_increment_was_pressed = true;
                         let _ = sender.send(HotkeyEvent::TtsSeedIncrement);
+                    }
+
+                    if tts_seed_decrement_binding.matches(&pressed, &key)
+                        && !tts_seed_decrement_was_pressed
+                    {
+                        tts_seed_decrement_was_pressed = true;
+                        let _ = sender.send(HotkeyEvent::TtsSeedDecrement);
                     }
 
                     if translate_text_binding.matches(&pressed, &key) && !translate_text_was_pressed
@@ -291,8 +304,11 @@ pub fn start_hotkey_listener(
                     if key == tts_voice_binding.key {
                         tts_voice_was_pressed = false;
                     }
-                    if key == tts_seed_binding.key {
-                        tts_seed_was_pressed = false;
+                    if key == tts_seed_increment_binding.key {
+                        tts_seed_increment_was_pressed = false;
+                    }
+                    if key == tts_seed_decrement_binding.key {
+                        tts_seed_decrement_was_pressed = false;
                     }
                     if key == translate_text_binding.key {
                         translate_text_was_pressed = false;

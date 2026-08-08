@@ -179,6 +179,12 @@ impl SettingsApp {
             ));
         });
         ui.horizontal(|ui| {
+            ui.label("Seed −1:       ");
+            ui.add(egui::TextEdit::singleline(
+                &mut self.config.hotkey.tts_seed_decrement,
+            ));
+        });
+        ui.horizontal(|ui| {
             ui.label("Translate Text:");
             ui.add(egui::TextEdit::singleline(
                 &mut self.config.hotkey.translate_text,
@@ -638,14 +644,15 @@ impl SettingsApp {
         ui.horizontal(|ui| {
             ui.checkbox(
                 &mut self.config.tts.longcat.concatenate_chunks,
-                "Automatically concatenate bounded LongCat requests",
+                "Automatically concatenate sentence-bounded LongCat requests",
             );
-            ui.label("Words per request:");
+            ui.label("Characters per request:");
             ui.add(
-                egui::DragValue::new(&mut self.config.tts.longcat.words_per_chunk).range(1..=250),
+                egui::DragValue::new(&mut self.config.tts.longcat.characters_per_request)
+                    .range(1..=4000),
             );
         });
-        ui.label(egui::RichText::new("When enabled, Vox sends word-bounded requests and joins their WAVs in order. When disabled, LongCat receives the complete text in one request. CJK characters count as units.").small());
+        ui.label(egui::RichText::new("When enabled, Vox scans backward from the character ceiling to the previous period, question mark, exclamation mark, or equivalent full-width terminator, then joins the resulting WAVs in order. It never cuts inside a sentence. When disabled, LongCat receives the complete text once and Vox uses that one WAV directly.").small());
         ui.add_space(6.0);
 
         // Edge TTS

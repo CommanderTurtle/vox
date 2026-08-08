@@ -5,6 +5,7 @@ inject_mode_switch = "Alt+Shift+V"
 tts_trigger = "Alt+T"
 tts_voice_switch = "Alt+Shift+T"
 tts_seed_increment = "Alt+Shift+S"
+tts_seed_decrement = "Alt+Shift+A"
 translate_text = "Alt+R"
 translate_tts = "Alt+Shift+R"
 record_translate_tts = "Alt+Shift+`"
@@ -124,11 +125,11 @@ guidance_strength = 4.0
 guidance_method = "apg"
 seed = 1024
 duration_scale = 1.0
-# When enabled, split by this many word-like units and concatenate the
-# returned WAVs. CJK characters count as individual units. When disabled,
-# the full text is sent in one request.
+# When enabled, scan backward from this character ceiling to the previous
+# sentence-ending punctuation mark and concatenate the returned WAVs. When
+# disabled, the full text is sent once and its single returned WAV is used.
 concatenate_chunks = true
-words_per_chunk = 35
+characters_per_request = 240
 
 [translate]
 # Standalone local translator (or another explicitly selected local

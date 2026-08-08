@@ -138,7 +138,7 @@ guidance_method = "apg"
 seed = 1024
 duration_scale = 1.0
 concatenate_chunks = true
-words_per_chunk = 35
+characters_per_request = 240
 
 [[tts.longcat.voice_profiles]]
 name = "Ana"
@@ -161,18 +161,25 @@ The tray always exposes `LongCat Voice Pair`. Every saved pair is a basic
 checkmarked item; when no pairs exist, it points the user to Settings. The
 active pair is also switchable with the configurable `tts_voice_switch`
 hotkey (`Alt+Shift+T` by default). `LongCat Seed (<current>)` provides direct
-`− 1` and `+ 1` actions, while `tts_seed_increment` (`Alt+Shift+S`) advances
-the persisted seed by one. Each change rebuilds only the TTS adapters and is
+`− 1` and `+ 1` actions. `tts_seed_increment` (`Alt+Shift+S`) advances the
+persisted seed, while `tts_seed_decrement` (`Alt+Shift+A`) lowers it. Each
+change rebuilds only the TTS adapters and is
 available to the next synthesis without restarting Vox. The old
 `prompt_audio_path` + inline `prompt_text` fields remain a fallback only when
 no named profiles exist.
 
-When `concatenate_chunks` is enabled, Vox makes requests of at most
-`words_per_chunk` word-like units and rebuilds every returned PCM WAV into one
-valid result in order. CJK characters count as individual units because those
-languages do not require spaces. When the switch is disabled, the complete
-text is sent as one LongCat request. This replaces the former spoken-duration
-guess with an explicit, user-controlled boundary.
+When `concatenate_chunks` is enabled, `characters_per_request` selects a
+literal character position. Vox scans backward from that position to the
+previous `.`, `?`, `!`, ellipsis, or equivalent full-width terminator, sends
+that complete sentence group once, and continues through the final sentence.
+It never cuts in the middle of a sentence. If LongCat actually rejects a
+multi-sentence request, Vox moves its final sentence back to the remaining
+text and retries the shorter prefix; successful WAVs are never regenerated.
+Every successful PCM WAV is rebuilt into one valid result in order.
+
+When `concatenate_chunks` is disabled, none of this splitting or retry logic
+runs: the complete text is sent exactly once and Vox returns the single WAV
+from that request directly.
 
 ## Synthesized-audio destinations
 

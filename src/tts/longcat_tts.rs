@@ -1,8 +1,9 @@
 //! LongCat local voice-cloning adapter.
 //!
-//! Long synthesis can be split by an explicit word-unit budget before it
-//! reaches the service. Returned PCM WAV files are decoded and reassembled
-//! as one valid WAV container for whichever Vox output is selected.
+//! Long synthesis can be divided at sentence-ending punctuation before it
+//! reaches the service. A configured character position tells Vox where to
+//! begin scanning backward. Returned PCM WAV files are reassembled as one
+//! valid WAV container for whichever Vox output is selected.
 
 use std::io::Cursor;
 use std::path::PathBuf;
@@ -164,97 +165,155 @@ impl TtsEngine for LongCatTtsEngine {
     }
 
     async fn synthesize(&self, text: &str) -> Result<Vec<u8>, TtsError> {
-        let chunks = if self.config.concatenate_chunks {
-            split_by_word_units(text, self.config.words_per_chunk.max(1))
-        } else {
-            let text = text.trim();
-            (!text.is_empty())
-                .then(|| vec![text.to_string()])
-                .unwrap_or_default()
-        };
-        if chunks.is_empty() {
+        let text = text.trim();
+        if text.is_empty() {
             return Err(Self::error("text is empty"));
         }
-        if self.config.concatenate_chunks {
-            log::info!(
-                "LongCat synthesis: {} word-bounded chunk(s), {} units maximum per request",
-                chunks.len(),
-                self.config.words_per_chunk.max(1)
-            );
-        } else {
+
+        if !self.config.concatenate_chunks {
             log::info!("LongCat synthesis: one unsplit request");
+            return self.synthesize_chunk(text).await;
         }
-        let mut audio = Vec::with_capacity(chunks.len());
-        for (index, chunk) in chunks.iter().enumerate() {
-            log::info!(
-                "LongCat chunk {}/{}: {} chars",
-                index + 1,
-                chunks.len(),
-                chunk.chars().count()
-            );
-            audio.push(self.synthesize_chunk(chunk).await?);
+
+        let maximum = self.config.characters_per_request.max(1);
+        log::info!(
+            "LongCat synthesis: sentence-boundary concatenation at {} characters",
+            maximum
+        );
+        let mut remaining = text.to_string();
+        let mut audio = Vec::new();
+        while !remaining.trim().is_empty() {
+            let (mut request, mut tail) = take_sentence_request(&remaining, maximum);
+            loop {
+                let request_number = audio.len() + 1;
+                log::info!(
+                    "LongCat request {}: {} characters",
+                    request_number,
+                    request.chars().count()
+                );
+                match self.synthesize_chunk(&request).await {
+                    Ok(wav) => {
+                        audio.push(wav);
+                        remaining = tail;
+                        break;
+                    }
+                    Err(error) => {
+                        let Some((shorter, deferred)) = retreat_one_sentence(&request) else {
+                            return Err(error);
+                        };
+                        log::warn!(
+                            "LongCat request {} failed; retreating one sentence and retrying: {}",
+                            request_number,
+                            error
+                        );
+                        request = shorter;
+                        tail = join_text(&deferred, &tail);
+                    }
+                }
+            }
         }
+
+        if audio.len() == 1 {
+            return Ok(audio.remove(0));
+        }
+        log::info!("LongCat concatenating {} successful WAVs", audio.len());
         merge_wav_chunks(&audio)
     }
 }
 
-/// Split on explicit word-like units rather than guessing spoken duration.
-/// Space-delimited words are one unit. Each CJK character is one unit so a
-/// sentence without spaces is still bounded and can use the same control.
-fn split_by_word_units(text: &str, maximum: usize) -> Vec<String> {
-    let maximum = maximum.max(1);
-    let mut units: Vec<(String, bool)> = Vec::new();
-    for token in text.split_whitespace() {
-        let mut token_units = Vec::new();
-        let mut segment = String::new();
-        for character in token.chars() {
-            if is_cjk(character) {
-                if !segment.is_empty() {
-                    token_units.push(std::mem::take(&mut segment));
-                }
-                token_units.push(character.to_string());
-            } else {
-                segment.push(character);
-            }
-        }
-        if !segment.is_empty() {
-            token_units.push(segment);
-        }
-        for (index, unit) in token_units.into_iter().enumerate() {
-            units.push((unit, index > 0));
-        }
+/// Select one request by scanning backward from a character ceiling to the
+/// previous sentence-ending punctuation. If no earlier terminator exists,
+/// scan forward to the first one; Vox never invents a mid-sentence cut.
+fn take_sentence_request(text: &str, maximum: usize) -> (String, String) {
+    let text = text.trim();
+    if text.chars().count() <= maximum {
+        return (text.to_string(), String::new());
     }
-    if units.is_empty() {
-        return Vec::new();
+    let limit = byte_index_after_characters(text, maximum);
+    let boundaries = sentence_boundaries(text);
+    let split = boundaries
+        .iter()
+        .copied()
+        .filter(|boundary| *boundary <= limit)
+        .next_back()
+        .or_else(|| {
+            boundaries
+                .iter()
+                .copied()
+                .find(|boundary| *boundary > limit)
+        });
+    let Some(split) = split else {
+        return (text.to_string(), String::new());
+    };
+    let request = text[..split].trim().to_string();
+    let tail = text[split..].trim().to_string();
+    if request.is_empty() {
+        (text.to_string(), String::new())
+    } else {
+        (request, tail)
     }
-    let mut chunks = Vec::new();
-    let mut current = String::new();
-    let mut count = 0usize;
-    for (unit, same_token) in units {
-        if count == maximum {
-            chunks.push(std::mem::take(&mut current));
-            count = 0;
-        }
-        if !current.is_empty() && !same_token {
-            current.push(' ');
-        }
-        current.push_str(&unit);
-        count += 1;
-    }
-    if !current.is_empty() {
-        chunks.push(current);
-    }
-    chunks
 }
 
-fn is_cjk(character: char) -> bool {
+/// If a request actually fails, move its final sentence back to the pending
+/// text and retry the shorter prefix. Successful generations are never lost.
+fn retreat_one_sentence(text: &str) -> Option<(String, String)> {
+    let text = text.trim();
+    let split = sentence_boundaries(text)
+        .into_iter()
+        .filter(|boundary| *boundary < text.len())
+        .next_back()?;
+    let shorter = text[..split].trim().to_string();
+    let deferred = text[split..].trim().to_string();
+    (!shorter.is_empty() && !deferred.is_empty()).then_some((shorter, deferred))
+}
+
+fn byte_index_after_characters(text: &str, characters: usize) -> usize {
+    text.char_indices()
+        .nth(characters)
+        .map(|(index, _)| index)
+        .unwrap_or(text.len())
+}
+
+fn sentence_boundaries(text: &str) -> Vec<usize> {
+    let mut boundaries = Vec::new();
+    let mut pending = None;
+    for (index, character) in text.char_indices() {
+        let end = index + character.len_utf8();
+        if is_sentence_terminator(character) {
+            pending = Some(end);
+        } else if pending.is_some() && is_sentence_closer(character) {
+            pending = Some(end);
+        } else if character.is_whitespace() {
+            if let Some(boundary) = pending.take() {
+                boundaries.push(boundary);
+            }
+        } else {
+            pending = None;
+        }
+    }
+    if let Some(boundary) = pending {
+        boundaries.push(boundary);
+    }
+    boundaries
+}
+
+fn is_sentence_terminator(character: char) -> bool {
+    matches!(character, '.' | '?' | '!' | '…' | '。' | '？' | '！')
+}
+
+fn is_sentence_closer(character: char) -> bool {
     matches!(
         character,
-        '\u{3400}'..='\u{4dbf}'
-            | '\u{4e00}'..='\u{9fff}'
-            | '\u{3040}'..='\u{30ff}'
-            | '\u{ac00}'..='\u{d7af}'
+        '"' | '\'' | '”' | '’' | ')' | ']' | '}' | '»' | '」' | '』'
     )
+}
+
+fn join_text(first: &str, second: &str) -> String {
+    match (first.trim(), second.trim()) {
+        ("", right) => right.to_string(),
+        (left, "") => left.to_string(),
+        (left, right) => format!("{left} {right}"),
+    }
 }
 
 fn merge_wav_chunks(chunks: &[Vec<u8>]) -> Result<Vec<u8>, TtsError> {
@@ -316,15 +375,32 @@ mod tests {
     use super::*;
 
     #[test]
-    fn chunks_by_explicit_word_budget() {
-        let text = "This is a deliberate six word sentence.";
-        let chunks = split_by_word_units(text, 3);
-        assert_eq!(chunks, ["This is a", "deliberate six word", "sentence."]);
+    fn scans_backward_to_previous_sentence() {
+        let text = "First sentence. Second sentence? Final one!";
+        let (request, tail) = take_sentence_request(text, 31);
+        assert_eq!(request, "First sentence.");
+        assert_eq!(tail, "Second sentence? Final one!");
     }
 
     #[test]
-    fn cjk_without_spaces_is_bounded() {
-        let chunks = split_by_word_units("你好世界测试", 2);
-        assert_eq!(chunks, ["你好", "世界", "测试"]);
+    fn never_splits_an_unpunctuated_sentence() {
+        let text = "This sentence deliberately has no terminator";
+        let (request, tail) = take_sentence_request(text, 8);
+        assert_eq!(request, text);
+        assert!(tail.is_empty());
+    }
+
+    #[test]
+    fn failure_retreats_exactly_one_sentence() {
+        let (request, deferred) = retreat_one_sentence("First sentence. Second sentence?").unwrap();
+        assert_eq!(request, "First sentence.");
+        assert_eq!(deferred, "Second sentence?");
+    }
+
+    #[test]
+    fn full_width_sentence_boundaries_are_supported() {
+        let (request, tail) = take_sentence_request("第一句。第二句？第三句！", 5);
+        assert_eq!(request, "第一句。");
+        assert_eq!(tail, "第二句？第三句！");
     }
 }

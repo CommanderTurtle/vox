@@ -75,6 +75,8 @@ pub struct HotkeyConfig {
     pub tts_voice_switch: String,
     #[serde(default = "default_tts_seed_increment")]
     pub tts_seed_increment: String,
+    #[serde(default = "default_tts_seed_decrement")]
+    pub tts_seed_decrement: String,
     #[serde(default = "default_translate_text")]
     pub translate_text: String,
     #[serde(default = "default_translate_tts")]
@@ -94,6 +96,9 @@ fn default_tts_voice_switch() -> String {
 }
 fn default_tts_seed_increment() -> String {
     "Alt+Shift+S".to_string()
+}
+fn default_tts_seed_decrement() -> String {
+    "Alt+Shift+A".to_string()
 }
 fn default_translate_text() -> String {
     "Alt+R".to_string()
@@ -403,11 +408,10 @@ pub struct LongCatTtsConfig {
     /// Disabling this sends the complete text as one LongCat request.
     #[serde(default = "default_true")]
     pub concatenate_chunks: bool,
-    /// Maximum word-like units in each request when concatenation is enabled.
-    /// CJK characters count individually because those languages do not
-    /// necessarily use spaces between words.
-    #[serde(default = "default_longcat_words_per_chunk")]
-    pub words_per_chunk: usize,
+    /// Character ceiling used to locate the previous sentence-ending
+    /// punctuation mark when concatenation is enabled.
+    #[serde(default = "default_longcat_characters_per_request")]
+    pub characters_per_request: usize,
 }
 
 /// One reusable LongCat voice-conditioning pair. The transcript is kept as a
@@ -475,8 +479,8 @@ fn default_longcat_seed() -> u64 {
 fn default_longcat_duration_scale() -> f32 {
     1.0
 }
-fn default_longcat_words_per_chunk() -> usize {
-    35
+fn default_longcat_characters_per_request() -> usize {
+    240
 }
 
 impl Default for LongCatTtsConfig {
@@ -493,7 +497,7 @@ impl Default for LongCatTtsConfig {
             seed: default_longcat_seed(),
             duration_scale: default_longcat_duration_scale(),
             concatenate_chunks: true,
-            words_per_chunk: default_longcat_words_per_chunk(),
+            characters_per_request: default_longcat_characters_per_request(),
         }
     }
 }

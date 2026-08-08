@@ -89,7 +89,7 @@ cargo run --release
 ### Local CrisperWhisper + LongCat pipeline
 
 This fork can use CrisperWhisper 2.0 in intended/non-literal or literal mode, LongCat
-voice cloning with configurable word-bounded concatenated requests, and a dedicated local
+voice cloning with configurable sentence-aware concatenated requests, and a dedicated local
 translation service that reproduces the proven local Qwen text-generation
 path without running ComfyUI. Windows can run the native Vox tray client while
 the model services remain inside WSL or on another private-LAN host.
@@ -127,6 +127,7 @@ startup sequence, settings, CLI checks, and service ownership boundaries.
 | TTS trigger        | <kbd>Alt</kbd>+<kbd>T</kbd>                  | Read selected text (or clipboard) aloud              |
 | Switch voice pair  | <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>T</kbd> | Cycle saved LongCat audio + transcript pairs         |
 | LongCat seed +1    | <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>S</kbd> | Increment the persisted LongCat seed by one          |
+| LongCat seed −1    | <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>A</kbd> | Decrement the persisted LongCat seed by one          |
 | Translate text     | <kbd>Alt</kbd>+<kbd>R</kbd>                  | Translate selection/clipboard, then inject           |
 | Translate + TTS    | <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>R</kbd> | Translate selection/clipboard, then speak            |
 | Speech translate → text | <kbd>Alt</kbd>+<kbd>Ctrl</kbd>+<kbd>R</kbd> | Transcribe, translate with active route, then inject |
@@ -192,6 +193,7 @@ inject_mode_switch = "Alt+Shift+V"
 tts_trigger = "Alt+T"
 tts_voice_switch = "Alt+Shift+T"
 tts_seed_increment = "Alt+Shift+S"
+tts_seed_decrement = "Alt+Shift+A"
 translate_text = "Alt+R"
 translate_tts = "Alt+Shift+R"
 record_translate_text = "Alt+Ctrl+R"
