@@ -115,6 +115,38 @@ that publisher enrollment.
 Do not disable driver-signature enforcement. Do not give a normal user a
 driver-signing key. This component instead uses a one-operation machine signer:
 
+### One-command developer installation
+
+From a normal PowerShell 7 terminal, run:
+
+```powershell
+.\install-development.ps1
+```
+
+The script requests UAC elevation, so an ordinary non-administrator account is
+prompted for the separate administrator account's credentials. It then:
+
+1. builds through the installed Visual Studio/WDK;
+2. enables `TESTSIGNING` on the current boot entry;
+3. signs the package with the ephemeral machine signer described below;
+4. installs the root audio device; and
+5. destroys every Vox private signing key before returning.
+
+If a previous run was interrupted after creating its signer, the next run
+reuses that signer instead of creating a duplicate. After a successful run,
+old Vox public certificates are removed and exactly one current public
+verification certificate remains. The script never changes local-group
+membership, never exports a PFX, and never reboots automatically.
+
+When it prints **installation finished**, restart Windows at your convenience.
+Test Mode stays enabled because Windows must continue accepting the
+self-signed driver on later boots. If you eventually disable it with
+`bcdedit /set testsigning off`, this development driver will no longer load.
+Secure Boot can reject the TESTSIGNING setting; when that happens, the script
+stops before creating a signer.
+
+### Signer lifecycle
+
 1. `sign-package.ps1` must run in **PowerShell 7.1+ as Administrator**.
 2. It creates a self-signed code-signing certificate under
    `Cert:\LocalMachine\My`. Its private key is non-exportable and its ACL grants
@@ -128,7 +160,8 @@ driver-signing key. This component instead uses a one-operation machine signer:
    `-DeleteKey`. The private key is destroyed even if signing fails. No PFX is
    written anywhere, and no user certificate store is used.
 
-After a build, sign the catalog from an elevated PowerShell 7 terminal:
+The following lower-level sequence remains available when each phase needs to
+be controlled separately:
 
 ```powershell
 pwsh
@@ -139,7 +172,7 @@ The final message confirms that `Cert:\LocalMachine\My\<thumbprint>` no longer
 exists. The remaining public certificate can verify this exact catalog but
 cannot sign anything.
 
-### Isolated Windows test boot
+### Optional isolated Windows test boot
 
 A locally self-signed kernel driver still requires Windows Test Mode. Test Mode
 does **not** turn signature enforcement off: Windows continues to require a

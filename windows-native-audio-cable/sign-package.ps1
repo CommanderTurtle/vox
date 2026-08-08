@@ -55,26 +55,43 @@ foreach ($sid in @($administrators, $system)) {
 }
 
 $label = Get-Date -Format 'yyyyMMdd-HHmmss'
-$subject = "CN=Vox Native Audio Cable Package $label"
+$subject = 'CN=Vox Native Audio Cable Development'
+$ownedSubject = {
+    param([Security.Cryptography.X509Certificates.X509Certificate2]$candidate)
+    $candidate.Subject -eq $subject -or $candidate.Subject -like 'CN=Vox Native Audio Cable Package *'
+}
 $cert = $null
 $thumbprint = $null
 $trustInstalled = $false
 $completed = $false
 
 try {
-    $cert = New-SelfSignedCertificate `
-        -Type CodeSigningCert `
-        -Subject $subject `
-        -FriendlyName "Vox package-only signer $label" `
-        -KeyFriendlyName "Vox ephemeral package key $label" `
-        -CertStoreLocation 'Cert:\LocalMachine\My' `
-        -Provider 'Microsoft Software Key Storage Provider' `
-        -KeyAlgorithm RSA `
-        -KeyLength 3072 `
-        -HashAlgorithm SHA256 `
-        -KeyExportPolicy NonExportable `
-        -SecurityDescriptor $privateKeyAcl `
-        -NotAfter (Get-Date).AddYears(10)
+    $interruptedSigners = @(Get-ChildItem -LiteralPath 'Cert:\LocalMachine\My' |
+        Where-Object { (& $ownedSubject $_) -and $_.HasPrivateKey } |
+        Sort-Object NotBefore -Descending)
+
+    if ($interruptedSigners.Count -gt 0) {
+        $cert = $interruptedSigners[0]
+        Write-Host "Reusing interrupted Vox signer: $($cert.Thumbprint)"
+        foreach ($duplicate in $interruptedSigners | Select-Object -Skip 1) {
+            Remove-Item -LiteralPath "Cert:\LocalMachine\My\$($duplicate.Thumbprint)" -DeleteKey -Force
+        }
+    }
+    else {
+        $cert = New-SelfSignedCertificate `
+            -Type CodeSigningCert `
+            -Subject $subject `
+            -FriendlyName "Vox package-only signer $label" `
+            -KeyFriendlyName "Vox ephemeral package key $label" `
+            -CertStoreLocation 'Cert:\LocalMachine\My' `
+            -Provider 'Microsoft Software Key Storage Provider' `
+            -KeyAlgorithm RSA `
+            -KeyLength 3072 `
+            -HashAlgorithm SHA256 `
+            -KeyExportPolicy NonExportable `
+            -SecurityDescriptor $privateKeyAcl `
+            -NotAfter (Get-Date).AddYears(10)
+    }
 
     $thumbprint = $cert.Thumbprint
     if (-not $cert.HasPrivateKey) {
@@ -97,15 +114,20 @@ try {
         throw "The signed catalog did not verify successfully (exit $LASTEXITCODE)."
     }
 
+    foreach ($store in @('Root', 'TrustedPublisher')) {
+        Get-ChildItem -LiteralPath "Cert:\LocalMachine\$store" |
+            Where-Object { (& $ownedSubject $_) -and $_.Thumbprint -ne $thumbprint } |
+            Remove-Item -Force
+    }
+
     $completed = $true
 }
 finally {
-    if ($thumbprint) {
-        $privatePath = "Cert:\LocalMachine\My\$thumbprint"
-        if (Test-Path -LiteralPath $privatePath) {
-            Remove-Item -LiteralPath $privatePath -DeleteKey -Force
+    Get-ChildItem -LiteralPath 'Cert:\LocalMachine\My' |
+        Where-Object { (& $ownedSubject $_) -and $_.HasPrivateKey } |
+        ForEach-Object {
+            Remove-Item -LiteralPath "Cert:\LocalMachine\My\$($_.Thumbprint)" -DeleteKey -Force
         }
-    }
 
     if (-not $completed -and $trustInstalled -and $thumbprint) {
         foreach ($store in @('Root', 'TrustedPublisher')) {
@@ -117,8 +139,8 @@ finally {
     }
 }
 
-if (Test-Path -LiteralPath "Cert:\LocalMachine\My\$thumbprint") {
-    throw 'The signed catalog exists, but the ephemeral private key cleanup could not be confirmed.'
+if (Get-ChildItem -LiteralPath 'Cert:\LocalMachine\My' | Where-Object { (& $ownedSubject $_) -and $_.HasPrivateKey }) {
+    throw 'The signed catalog exists, but complete Vox private-key cleanup could not be confirmed.'
 }
 
 Write-Host "Signed only: $catalog"
