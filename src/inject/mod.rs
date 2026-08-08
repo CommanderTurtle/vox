@@ -8,9 +8,32 @@ pub mod clipboard;
 pub mod keyboard;
 pub mod text_reader;
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use arboard::{Clipboard, ImageData};
 
 use crate::config::Config;
+
+static RESTORE_CLIPBOARD: AtomicBool = AtomicBool::new(true);
+static COPY_ONLY: AtomicBool = AtomicBool::new(false);
+
+/// Set the process-wide clipboard preservation policy. Clipboard-backed
+/// injection and selection capture both consult this value.
+pub fn set_restore_clipboard(restore: bool) {
+    RESTORE_CLIPBOARD.store(restore, Ordering::Relaxed);
+}
+
+pub fn restore_clipboard_enabled() -> bool {
+    RESTORE_CLIPBOARD.load(Ordering::Relaxed)
+}
+
+pub fn set_copy_only(copy_only: bool) {
+    COPY_ONLY.store(copy_only, Ordering::Relaxed);
+}
+
+pub fn copy_only_enabled() -> bool {
+    COPY_ONLY.load(Ordering::Relaxed)
+}
 
 /// Text injection error.
 #[derive(Debug, thiserror::Error)]
@@ -103,6 +126,9 @@ impl InjectMode {
 
 /// Inject text at the current cursor position using the specified mode.
 pub fn inject_text(text: &str, mode: InjectMode) -> Result<(), InjectError> {
+    if copy_only_enabled() {
+        return clipboard::copy_text(text);
+    }
     match mode {
         InjectMode::Keyboard => keyboard::inject_keyboard(text),
         InjectMode::Clipboard => clipboard::inject_clipboard(text),

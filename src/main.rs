@@ -184,6 +184,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let translator = Arc::new(Translator::new(&config_mgr.read().translate));
 
     let inject_mode = InjectMode::from_config(&config_mgr.read());
+    inject::set_restore_clipboard(config_mgr.read().inject.restore_clipboard);
+    inject::set_copy_only(config_mgr.read().inject.copy_only);
     let tts_input_mode = TtsInputMode::from_config(&config_mgr.read());
     let record_mode = RecordMode::from_str(&config_mgr.read().general.record_mode);
 
@@ -197,6 +199,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         asr_engines: asr_mgr.engine_names(),
         asr_active: asr_mgr.active_engine(),
         inject_mode: inject_mode.as_str().to_string(),
+        restore_clipboard: config_mgr.read().inject.restore_clipboard,
+        copy_only: config_mgr.read().inject.copy_only,
         tts_engines: tts_mgr.engine_names(),
         tts_active: tts_mgr.active_engine(),
         tts_input_mode: tts_input_mode.as_str().to_string(),
@@ -305,6 +309,8 @@ fn build_menu_model(ctx: &AppCtx, app_state: AppState) -> MenuModel {
         asr_engines: ctx.asr_mgr.engine_names(),
         asr_active: ctx.asr_mgr.active_engine(),
         inject_mode: ctx.inject_mode.as_str().to_string(),
+        restore_clipboard: ctx.config_mgr.read().inject.restore_clipboard,
+        copy_only: ctx.config_mgr.read().inject.copy_only,
         tts_engines: ctx.tts_mgr.engine_names(),
         tts_active: ctx.tts_mgr.active_engine(),
         tts_input_mode: ctx.tts_input_mode.as_str().to_string(),
@@ -360,6 +366,24 @@ fn handle_tray_event(
             let mut cfg = ctx.config_mgr.write();
             cfg.inject.mode = mode;
             drop(cfg);
+            let _ = ctx.config_mgr.save();
+            push_tray(ctx, AppState::Idle);
+        }
+        Ok(TrayEvent::SetRestoreClipboard(restore)) => {
+            {
+                let mut cfg = ctx.config_mgr.write();
+                cfg.inject.restore_clipboard = restore;
+            }
+            inject::set_restore_clipboard(restore);
+            let _ = ctx.config_mgr.save();
+            push_tray(ctx, AppState::Idle);
+        }
+        Ok(TrayEvent::SetCopyOnly(copy_only)) => {
+            {
+                let mut cfg = ctx.config_mgr.write();
+                cfg.inject.copy_only = copy_only;
+            }
+            inject::set_copy_only(copy_only);
             let _ = ctx.config_mgr.save();
             push_tray(ctx, AppState::Idle);
         }
@@ -936,6 +960,8 @@ fn apply_settings(ctx: &mut AppCtx, new_cfg: config::Config) {
     ctx.tts_mgr = Arc::new(build_tts_manager(&ctx.config_mgr));
     ctx.translator = Arc::new(Translator::new(&ctx.config_mgr.read().translate));
     ctx.inject_mode = InjectMode::from_config(&ctx.config_mgr.read());
+    inject::set_restore_clipboard(ctx.config_mgr.read().inject.restore_clipboard);
+    inject::set_copy_only(ctx.config_mgr.read().inject.copy_only);
     ctx.tts_input_mode = TtsInputMode::from_config(&ctx.config_mgr.read());
     ctx.record_mode = RecordMode::from_str(&ctx.config_mgr.read().general.record_mode);
 

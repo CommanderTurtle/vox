@@ -389,6 +389,17 @@ impl SettingsApp {
                     );
                 });
         });
+        ui.checkbox(
+            &mut self.config.inject.restore_clipboard,
+            "Restore clipboard afterwards",
+        );
+        ui.checkbox(&mut self.config.inject.copy_only, "Copy only (no paste)");
+        ui.label(
+            egui::RichText::new(
+                "These switches apply globally. Copy only leaves STT output on the clipboard and skips keyboard/paste injection.",
+            )
+            .small(),
+        );
 
         ui.horizontal(|ui| {
             ui.label("Record Mode:");

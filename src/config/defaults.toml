@@ -66,6 +66,8 @@ hotwords = ""
 
 [inject]
 mode = "keyboard"
+restore_clipboard = true
+copy_only = false
 
 [tts]
 # Free Microsoft Edge TTS — no API key required.

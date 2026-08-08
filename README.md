@@ -133,6 +133,13 @@ tray menu or Settings):
 All keybindings are configurable in `config.toml`; edited chords take effect
 the next time Vox starts.
 
+Settings exposes two independent global clipboard switches:
+
+- **Restore clipboard afterwards** restores whatever was present before Vox temporarily copies or pastes.
+- **Copy only (no paste)** leaves every completed STT transcript on the clipboard and skips cursor injection.
+
+Both switches are also checkmarked under the tray's **Clipboard Behavior** submenu and apply live without changing any recording hotkey.
+
 ---
 
 ## Tray Menu
@@ -140,6 +147,7 @@ the next time Vox starts.
 ```
 ASR Engine   ▸  whisper-cpp / openai / mimo / aliyun / whisper-local   (✓ active)
 Inject Mode  ▸  Keyboard / Clipboard                                    (✓ active)
+Clipboard Behavior ▸ Restore clipboard afterwards / Copy only (no paste) (✓ each)
 Record Mode  ▸  Push-to-Talk (hold) / Toggle (press)                    (✓ active)
 ─────────────
 TTS Engine   ▸  edge-tts / mimo-tts                                      (✓ active)
@@ -161,13 +169,9 @@ needed when you switch engines or modes.
 
 ## Configuration
 
-Configuration file location:
-
-| Platform | Path                                                      |
-| -------- | --------------------------------------------------------- |
-| Windows  | `%APPDATA%\vox\vox\config\config.toml`                  |
-| macOS    | `~/Library/Application Support/com.vox/vox/config.toml` |
-| Linux    | `~/.config/vox/config.toml`                             |
+Configuration is portable: `config.toml` lives beside the running Vox
+executable on every platform. If it is not present there, Vox creates a fresh
+one there. No platform config directory or migration path is used.
 
 ```toml
 [hotkey]
@@ -183,6 +187,11 @@ record_translate_text = "Alt+Ctrl+R"
 record_tts = "Alt+Ctrl+`"
 record_translate_tts = "Alt+Shift+`"
 translate_route_switch = "Alt+Shift+L"
+
+[inject]
+mode = "keyboard"
+restore_clipboard = true
+copy_only = false
 
 [asr]
 primary_engine = "whisper-cpp"          # local, no key

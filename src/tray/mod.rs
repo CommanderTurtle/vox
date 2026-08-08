@@ -26,6 +26,8 @@ pub enum TrayEvent {
     ToggleRecording,
     SetEngine(String),
     SetInjectMode(String),
+    SetRestoreClipboard(bool),
+    SetCopyOnly(bool),
     OpenSettings,
     SetTtsEngine(String),
     SetTtsInputMode(String),
@@ -57,6 +59,8 @@ pub struct MenuModel {
     pub asr_active: String,
     /// "keyboard" | "clipboard"
     pub inject_mode: String,
+    pub restore_clipboard: bool,
+    pub copy_only: bool,
     pub tts_engines: Vec<String>,
     pub tts_active: String,
     /// "selection" | "clipboard"
@@ -92,6 +96,8 @@ const ID_TOGGLE: &str = "toggle";
 const ID_SETTINGS: &str = "settings";
 const ID_QUIT: &str = "quit";
 const ID_TRANSLATE_ENABLED: &str = "translate-enabled";
+const ID_RESTORE_CLIPBOARD: &str = "restore-clipboard";
+const ID_COPY_ONLY: &str = "copy-only";
 const ID_LONGCAT_SEED_DECREMENT: &str = "longcat-seed-decrement";
 const ID_LONGCAT_SEED_INCREMENT: &str = "longcat-seed-increment";
 
@@ -175,6 +181,23 @@ fn build_menu(m: &MenuModel) -> Menu {
         ));
     }
     let _ = menu.append(&inject_menu);
+
+    let clipboard_menu = Submenu::new("Clipboard Behavior", true);
+    let _ = clipboard_menu.append(&CheckMenuItem::with_id(
+        ID_RESTORE_CLIPBOARD,
+        "Restore clipboard afterwards",
+        true,
+        m.restore_clipboard,
+        None,
+    ));
+    let _ = clipboard_menu.append(&CheckMenuItem::with_id(
+        ID_COPY_ONLY,
+        "Copy only (no paste)",
+        true,
+        m.copy_only,
+        None,
+    ));
+    let _ = menu.append(&clipboard_menu);
 
     // ── Input group: record mode (push-to-talk vs toggle) ────────────
     let record_menu = Submenu::new("Record Mode", true);
@@ -345,6 +368,12 @@ fn map_event(id: &str, model: &MenuModel) -> Option<TrayEvent> {
     }
     if id == ID_TRANSLATE_ENABLED {
         return Some(TrayEvent::SetTranslateEnabled(!model.translate_enabled));
+    }
+    if id == ID_RESTORE_CLIPBOARD {
+        return Some(TrayEvent::SetRestoreClipboard(!model.restore_clipboard));
+    }
+    if id == ID_COPY_ONLY {
+        return Some(TrayEvent::SetCopyOnly(!model.copy_only));
     }
     if id == ID_LONGCAT_SEED_DECREMENT {
         return Some(TrayEvent::AdjustLongCatSeed(-1));

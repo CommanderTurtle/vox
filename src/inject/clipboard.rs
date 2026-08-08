@@ -9,7 +9,17 @@ use std::time::Duration;
 
 use enigo::{Direction, Enigo, Key, Keyboard, Settings};
 
-use crate::inject::{ClipboardSnapshot, InjectError};
+use crate::inject::{restore_clipboard_enabled, ClipboardSnapshot, InjectError};
+
+/// Store text on the clipboard without typing, pasting, or restoring the
+/// previous contents. This is the dedicated STT `copy` output.
+pub fn copy_text(text: &str) -> Result<(), InjectError> {
+    let mut clipboard = Clipboard::new()
+        .map_err(|e| InjectError::Clipboard(format!("Failed to open clipboard: {}", e)))?;
+    clipboard
+        .set_text(text)
+        .map_err(|e| InjectError::Clipboard(format!("Failed to set clipboard text: {}", e)))
+}
 
 /// Inject text by writing to clipboard and simulating Ctrl+V.
 ///
@@ -47,9 +57,12 @@ pub fn inject_clipboard(text: &str) -> Result<(), InjectError> {
     let _ = enigo.key(v_key, Direction::Click);
     let _ = enigo.key(modifier, Direction::Release);
 
-    // Wait for paste to complete, then restore the original clipboard.
+    // Wait for paste to complete, then follow the global preservation policy.
+    // When disabled, the injected transcript remains on the clipboard.
     thread::sleep(Duration::from_millis(50));
-    snapshot.restore();
+    if restore_clipboard_enabled() {
+        snapshot.restore();
+    }
 
     Ok(())
 }

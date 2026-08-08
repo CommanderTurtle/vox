@@ -6,7 +6,6 @@
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 
-use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------
@@ -597,6 +596,14 @@ impl Default for EdgeTtsConfig {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct InjectConfig {
     pub mode: String,
+    #[serde(default = "default_restore_clipboard")]
+    pub restore_clipboard: bool,
+    #[serde(default)]
+    pub copy_only: bool,
+}
+
+fn default_restore_clipboard() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -634,19 +641,16 @@ pub struct ConfigManager {
 }
 
 impl ConfigManager {
-    /// Return the canonical project directory for config files.
-    pub fn project_dirs() -> Option<ProjectDirs> {
-        ProjectDirs::from("com", "vox", "vox")
-    }
-
-    /// Return the expected config file path.
+    /// Keep configuration beside the executable so a Vox build and its
+    /// settings remain one portable unit.
     pub fn default_config_path() -> PathBuf {
-        let dirs = Self::project_dirs().expect("could not determine config directory");
-        let config_dir = dirs.config_dir();
-        config_dir.join("config.toml")
+        std::env::current_exe()
+            .ok()
+            .and_then(|path| path.parent().map(|parent| parent.join("config.toml")))
+            .unwrap_or_else(|| PathBuf::from("config.toml"))
     }
 
-    /// Load config from the default platform path.
+    /// Load config from beside the running executable.
     /// If the file doesn't exist, create it with defaults.
     pub fn load_or_create() -> Result<Self, Box<dyn std::error::Error>> {
         let path = Self::default_config_path();

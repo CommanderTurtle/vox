@@ -11,7 +11,7 @@ use std::time::Duration;
 use arboard::Clipboard;
 use enigo::{Direction, Enigo, Key, Keyboard, Settings};
 
-use crate::inject::{ClipboardSnapshot, InjectError};
+use crate::inject::{restore_clipboard_enabled, ClipboardSnapshot, InjectError};
 
 /// Read selected text by simulating Ctrl+C and reading the clipboard.
 /// Retries a few times if clipboard is empty (timing issue).
@@ -61,9 +61,11 @@ pub fn read_selected_text() -> Result<String, InjectError> {
         }
     }
 
-    // Restore the original clipboard contents (text or image).
+    // Follow the same global preservation policy as clipboard injection.
     thread::sleep(Duration::from_millis(50));
-    snapshot.restore();
+    if restore_clipboard_enabled() {
+        snapshot.restore();
+    }
 
     Ok(selected)
 }
