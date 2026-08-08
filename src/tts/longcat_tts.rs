@@ -6,7 +6,7 @@
 //! and reassembled as one valid WAV container for Vox playback.
 
 use std::io::Cursor;
-use std::path::Path;
+use std::path::PathBuf;
 
 use async_trait::async_trait;
 use reqwest::multipart;
@@ -56,29 +56,31 @@ impl LongCatTtsEngine {
                     "the active LongCat voice profile requires both an audio file and transcript file",
                 ));
             }
-            let transcript = tokio::fs::read_to_string(&profile.transcript_path)
-                .await
-                .map_err(|error| {
-                    Self::error(format!(
-                        "could not read reference transcript {}: {error}",
-                        profile.transcript_path
-                    ))
-                })?;
-            (profile.audio_path.clone(), transcript)
+            let transcript_path = configured_path(&profile.transcript_path);
+            let transcript =
+                tokio::fs::read_to_string(&transcript_path)
+                    .await
+                    .map_err(|error| {
+                        Self::error(format!(
+                            "could not read reference transcript {}: {error}",
+                            transcript_path.display()
+                        ))
+                    })?;
+            (configured_path(&profile.audio_path), transcript)
         } else {
             (
-                self.config.prompt_audio_path.clone(),
+                configured_path(&self.config.prompt_audio_path),
                 self.config.prompt_text.clone(),
             )
         };
 
-        if !prompt_audio_path.trim().is_empty() {
+        if !prompt_audio_path.as_os_str().is_empty() {
             if prompt_text.trim().is_empty() {
                 return Err(Self::error(
                     "the reference transcript is empty for the selected LongCat voice",
                 ));
             }
-            let path = Path::new(&prompt_audio_path);
+            let path = prompt_audio_path.as_path();
             let bytes = tokio::fs::read(path).await.map_err(|error| {
                 Self::error(format!(
                     "could not read reference voice {}: {error}",
@@ -136,6 +138,24 @@ impl LongCatTtsEngine {
             .map(|bytes| bytes.to_vec())
             .map_err(|error| Self::error(format!("could not read synthesized WAV: {error}")))
     }
+}
+
+/// Paths pasted from file dialogs, shells, or config snippets may carry one
+/// pair of wrapping quotes. Windows treats those quotes as invalid filename
+/// characters, so remove only a matching outer pair and preserve the path
+/// itself verbatim.
+fn configured_path(value: &str) -> PathBuf {
+    let value = value.trim();
+    let value = value
+        .strip_prefix('"')
+        .and_then(|inner| inner.strip_suffix('"'))
+        .or_else(|| {
+            value
+                .strip_prefix('\'')
+                .and_then(|inner| inner.strip_suffix('\''))
+        })
+        .unwrap_or(value);
+    PathBuf::from(value)
 }
 
 #[async_trait]
