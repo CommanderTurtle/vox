@@ -67,8 +67,9 @@ crossbeam = "0.8"
 # Temp file for TTS audio playback
 tempfile = "3"
 
-# Native audio playback (decodes & plays WAV/MP3 in-process, no external player)
-rodio = { version = "0.20", default-features = false, features = ["wav", "mp3"] }
+# Native audio playback/decoding. ISO-MP4 + AAC gives the router direct M4A
+# hoisting without ffmpeg, temporary conversions, or cloud services.
+rodio = { version = "0.20", default-features = false, features = ["wav", "mp3", "symphonia-isomp4", "symphonia-aac", "symphonia-alac"] }
 
 # Tiny local API used only by the separately built native microphone router.
 tiny_http = { version = "0.12", optional = true }
@@ -98,8 +99,9 @@ optional = true
 
 # Target-specific: Windows message pump for tray icon right-click
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.59", features = ["Win32_UI_WindowsAndMessaging"] }
+windows-sys = { version = "0.59", features = ["Win32_UI_WindowsAndMessaging", "Win32_Graphics_Gdi", "Win32_Graphics_Dwm", "Win32_Media_Multimedia"] }
 clipboard-win = "5.4"
+rfd = "0.15"
 
 # Disable unused build artifacts to reduce compile time
 [profile.release]

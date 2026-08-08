@@ -43,7 +43,7 @@ pub struct SubtitleConfig {
 }
 
 fn default_subtitle_chunk_seconds() -> f32 {
-    3.0
+    1.5
 }
 fn default_subtitle_font_size() -> f32 {
     30.0

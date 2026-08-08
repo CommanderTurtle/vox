@@ -5,13 +5,14 @@
 //! endpoint. Select the playback side of a virtual audio cable as the output;
 //! applications then use that cable's capture side as their microphone.
 
-use std::io::{Cursor, Read};
+use std::io::{BufReader, Cursor, Read};
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, SampleFormat, Stream, StreamConfig};
 use crossbeam::queue::ArrayQueue;
+use rodio::Source;
 use serde::{Deserialize, Serialize};
 use tiny_http::{Header, Method, Response, Server, StatusCode};
 
@@ -107,6 +108,9 @@ struct Mixer {
     output_rate: u32,
     output_channels: usize,
     system_audio: Option<Arc<ArrayQueue<f32>>>,
+    /// Independent consumer lane for vox-http. Desktop captions and remote
+    /// API clients can therefore run simultaneously without stealing chunks.
+    system_audio_http: Option<Arc<ArrayQueue<f32>>>,
     system_audio_rate: u32,
 }
 
@@ -167,6 +171,11 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             system_audio_rate as usize * config.queue_seconds.clamp(5, 3600),
         ))
     });
+    let system_audio_http = system_audio.as_ref().map(|_| {
+        Arc::new(ArrayQueue::new(
+            system_audio_rate as usize * config.queue_seconds.clamp(5, 3600),
+        ))
+    });
     let mixer = Mixer {
         inputs: routes,
         injected: Arc::new(ArrayQueue::new(capacity)),
@@ -174,6 +183,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         output_rate,
         output_channels,
         system_audio,
+        system_audio_http,
         system_audio_rate,
     };
 
@@ -191,7 +201,13 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     let mut streams = Vec::new();
     for ((_, device), route) in input_devices.into_iter().zip(mixer.inputs.iter().cloned()) {
-        streams.push(build_input_stream(&device, route, output_rate, false)?);
+        streams.push(build_input_stream(
+            &device,
+            route,
+            output_rate,
+            false,
+            None,
+        )?);
     }
     if let Some(samples) = &mixer.system_audio {
         let device = select_output(&host, &config.system_audio_device)?;
@@ -208,6 +224,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             route,
             mixer.system_audio_rate,
             true,
+            mixer.system_audio_http.clone(),
         )?);
         log::info!(
             "System-audio subtitle tap: '{}' at {} Hz",
@@ -235,9 +252,112 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     log::info!("Vox microphone router ready at http://{}", config.bind);
     log::info!("Press Ctrl+C to stop; audio streams remain active while this process runs.");
-    loop {
-        std::thread::park();
+    if std::env::args().any(|argument| argument == "--headless") {
+        loop {
+            std::thread::park();
+        }
     }
+
+    let ui_mixer = mixer;
+    let title = "Vox Microphone Router";
+    let options = eframe::NativeOptions {
+        viewport: egui::ViewportBuilder::default()
+            .with_title(title)
+            .with_inner_size([720.0, 350.0])
+            .with_min_inner_size([520.0, 280.0]),
+        ..Default::default()
+    };
+    eframe::run_native(
+        title,
+        options,
+        Box::new(move |_cc| Ok(Box::new(RouterApp::new(ui_mixer, output_name)))),
+    )
+    .map_err(|error| std::io::Error::other(error.to_string()))?;
+    drop(streams);
+    Ok(())
+}
+
+struct RouterApp {
+    mixer: Mixer,
+    output_name: String,
+    media_path: String,
+    status: String,
+}
+
+impl RouterApp {
+    fn new(mixer: Mixer, output_name: String) -> Self {
+        Self {
+            mixer,
+            output_name,
+            media_path: String::new(),
+            status: "Ready. Physical microphone routing remains live.".into(),
+        }
+    }
+}
+
+impl eframe::App for RouterApp {
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        ui.heading("Vox microphone router");
+        ui.label(format!(
+            "Output: {} — {} Hz / {} channel(s)",
+            self.output_name, self.mixer.output_rate, self.mixer.output_channels
+        ));
+        ui.label(format!(
+            "Live inputs: {}",
+            self.mixer
+                .inputs
+                .iter()
+                .map(|route| route.name.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+        ui.add_space(16.0);
+        ui.label(egui::RichText::new("Hoist media to the virtual microphone").strong());
+        ui.horizontal(|ui| {
+            ui.add(
+                egui::TextEdit::singleline(&mut self.media_path)
+                    .hint_text("WAV, MP3, or M4A path")
+                    .desired_width(510.0),
+            );
+            if ui.button("Browse…").clicked() {
+                if let Some(path) = pick_media_file() {
+                    self.media_path = path;
+                }
+            }
+        });
+        if ui.button("Hoist to microphone").clicked() {
+            self.status = match std::fs::read(self.media_path.trim_matches([' ', '\"', '\''])) {
+                Ok(audio) => match enqueue_audio(&audio, &self.mixer) {
+                    Ok(frames) => format!("Queued {frames} audio frames."),
+                    Err(error) => format!("Could not hoist media: {error}"),
+                },
+                Err(error) => format!("Could not read media: {error}"),
+            };
+        }
+        ui.add_space(10.0);
+        ui.label(&self.status);
+        ui.add_space(18.0);
+        ui.separator();
+        ui.label(
+            egui::RichText::new(
+                "The router uses each selected Windows device's native shared-mode format. It does not codec-compress audio; it only downmixes to the microphone bus and resamples when device rates differ. Restart the router after changing Windows' default devices.",
+            )
+            .small(),
+        );
+    }
+}
+
+#[cfg(windows)]
+fn pick_media_file() -> Option<String> {
+    rfd::FileDialog::new()
+        .add_filter("Audio", &["wav", "mp3", "m4a"])
+        .pick_file()
+        .map(|path| path.to_string_lossy().into_owned())
+}
+
+#[cfg(not(windows))]
+fn pick_media_file() -> Option<String> {
+    None
 }
 
 fn config_path() -> PathBuf {
@@ -330,6 +450,7 @@ fn build_input_stream(
     route: Route,
     output_rate: u32,
     loopback: bool,
+    mirror: Option<Arc<ArrayQueue<f32>>>,
 ) -> Result<Stream, Box<dyn std::error::Error + Send + Sync>> {
     // CPAL's WASAPI backend transparently enables LOOPBACK when an input
     // stream is built on an output endpoint. Loopback must use that output
@@ -358,6 +479,7 @@ fn build_input_stream(
                         input_rate,
                         output_rate,
                         &route.samples,
+                        mirror.as_deref(),
                         &mut phase,
                         |sample| sample,
                     )
@@ -377,6 +499,7 @@ fn build_input_stream(
                         input_rate,
                         output_rate,
                         &route.samples,
+                        mirror.as_deref(),
                         &mut phase,
                         |sample| sample as f32 / 32768.0,
                     )
@@ -396,6 +519,7 @@ fn build_input_stream(
                         input_rate,
                         output_rate,
                         &route.samples,
+                        mirror.as_deref(),
                         &mut phase,
                         |sample| (sample as f32 - 32768.0) / 32768.0,
                     )
@@ -415,6 +539,7 @@ fn route_input<T: Copy>(
     input_rate: u32,
     output_rate: u32,
     queue: &ArrayQueue<f32>,
+    mirror: Option<&ArrayQueue<f32>>,
     phase: &mut f64,
     convert: impl Fn(T) -> f32,
 ) {
@@ -424,6 +549,9 @@ fn route_input<T: Copy>(
         *phase += step;
         while *phase >= 1.0 {
             push_latest(queue, mono);
+            if let Some(mirror) = mirror {
+                push_latest(mirror, mono);
+            }
             *phase -= 1.0;
         }
     }
@@ -505,6 +633,7 @@ fn serve(bind: &str, mixer: Mixer) -> Result<(), Box<dyn std::error::Error + Sen
                     "injected_frames_queued": mixer.injected.len(),
                     "system_audio_enabled": mixer.system_audio.is_some(),
                     "system_audio_frames_buffered": mixer.system_audio.as_ref().map(|queue| queue.len()).unwrap_or(0),
+                    "system_audio_http_frames_buffered": mixer.system_audio_http.as_ref().map(|queue| queue.len()).unwrap_or(0),
                 })
                 .to_string();
                 let _ = request.respond(json_response(body, StatusCode(200)));
@@ -531,13 +660,13 @@ fn serve(bind: &str, mixer: Mixer) -> Result<(), Box<dyn std::error::Error + Sen
                 let _ = request.respond(json_response(body, StatusCode(200)));
             }
             (&Method::Post, "/v1/forward") => {
-                let mut wav = Vec::new();
+                let mut audio = Vec::new();
                 match request
                     .as_reader()
                     .take(512 * 1024 * 1024)
-                    .read_to_end(&mut wav)
+                    .read_to_end(&mut audio)
                 {
-                    Ok(_) => match enqueue_wav(&wav, &mixer) {
+                    Ok(_) => match enqueue_audio(&audio, &mixer) {
                         Ok(frames) => {
                             let body = serde_json::json!({"queued_frames": frames}).to_string();
                             let _ = request.respond(json_response(body, StatusCode(202)));
@@ -551,11 +680,54 @@ fn serve(bind: &str, mixer: Mixer) -> Result<(), Box<dyn std::error::Error + Sen
                     }
                 }
             }
+            (&Method::Post, "/v1/playback") => {
+                let mut audio = Vec::new();
+                match request
+                    .as_reader()
+                    .take(512 * 1024 * 1024)
+                    .read_to_end(&mut audio)
+                {
+                    Ok(_) => match decode_audio(&audio) {
+                        Ok(_) => {
+                            let playback_mixer = mixer.clone();
+                            std::thread::spawn(move || {
+                                if let Err(error) = play_audio(&audio) {
+                                    log::error!("Router playback failed: {error}");
+                                }
+                                // Playback is captured by the WASAPI loopback
+                                // tap. Drop it after playback so subtitle/dub
+                                // consumers never process their own output.
+                                clear_system_audio(&playback_mixer);
+                            });
+                            let _ = request.respond(json_response(
+                                serde_json::json!({"status": "playing"}).to_string(),
+                                StatusCode(202),
+                            ));
+                        }
+                        Err(error) => {
+                            let _ = request.respond(text_response(error, StatusCode(400)));
+                        }
+                    },
+                    Err(error) => {
+                        let _ = request.respond(text_response(error.to_string(), StatusCode(400)));
+                    }
+                }
+            }
+            (&Method::Post, "/v1/system-audio/clear") => {
+                let cleared = clear_system_audio(&mixer);
+                let _ = request.respond(json_response(
+                    serde_json::json!({"cleared_frames": cleared}).to_string(),
+                    StatusCode(200),
+                ));
+            }
             (&Method::Get, url) if url.starts_with("/v1/system-audio/take") => {
                 let minimum_seconds = query_number(url, "min_seconds")
                     .unwrap_or(3.0)
                     .clamp(0.25, 30.0);
-                match take_system_audio(&mixer, minimum_seconds) {
+                let latest_seconds =
+                    query_number(url, "latest_seconds").map(|seconds| seconds.clamp(0.25, 30.0));
+                let consumer = query_text(url, "consumer").unwrap_or("desktop");
+                match take_system_audio(&mixer, minimum_seconds, latest_seconds, consumer) {
                     Ok(Some(wav)) => {
                         let header = Header::from_bytes("Content-Type", "audio/wav").unwrap();
                         let response = Response::from_data(wav)
@@ -570,6 +742,9 @@ fn serve(bind: &str, mixer: Mixer) -> Result<(), Box<dyn std::error::Error + Sen
                         let _ = request.respond(text_response(error, StatusCode(409)));
                     }
                 }
+            }
+            (&Method::Options, _) => {
+                let _ = request.respond(cors(Response::empty(StatusCode(204))));
             }
             _ => {
                 let _ = request.respond(text_response("not found".into(), StatusCode(404)));
@@ -588,14 +763,37 @@ fn query_number(url: &str, key: &str) -> Option<f32> {
         .find_map(|(name, value)| (name == key).then(|| value.parse().ok()).flatten())
 }
 
-fn take_system_audio(mixer: &Mixer, minimum_seconds: f32) -> Result<Option<Vec<u8>>, String> {
-    let queue = mixer
-        .system_audio
-        .as_ref()
-        .ok_or_else(|| "system-audio capture is disabled in mic-forwarder.toml".to_string())?;
+fn query_text<'a>(url: &'a str, key: &str) -> Option<&'a str> {
+    url.split_once('?')
+        .map(|(_, query)| query)
+        .into_iter()
+        .flat_map(|query| query.split('&'))
+        .filter_map(|pair| pair.split_once('='))
+        .find_map(|(name, value)| (name == key).then_some(value))
+}
+
+fn take_system_audio(
+    mixer: &Mixer,
+    minimum_seconds: f32,
+    latest_seconds: Option<f32>,
+    consumer: &str,
+) -> Result<Option<Vec<u8>>, String> {
+    let queue = if consumer.eq_ignore_ascii_case("http") {
+        &mixer.system_audio_http
+    } else {
+        &mixer.system_audio
+    }
+    .as_ref()
+    .ok_or_else(|| "system-audio capture is disabled in mic-forwarder.toml".to_string())?;
     let minimum = (mixer.system_audio_rate as f32 * minimum_seconds) as usize;
     if queue.len() < minimum {
         return Ok(None);
+    }
+    if let Some(seconds) = latest_seconds {
+        let keep = (mixer.system_audio_rate as f32 * seconds) as usize;
+        while queue.len() > keep {
+            let _ = queue.pop();
+        }
     }
     let mut wav = Vec::new();
     {
@@ -619,30 +817,22 @@ fn take_system_audio(mixer: &Mixer, minimum_seconds: f32) -> Result<Option<Vec<u
     Ok(Some(wav))
 }
 
-fn enqueue_wav(wav: &[u8], mixer: &Mixer) -> Result<usize, String> {
-    let mut reader =
-        hound::WavReader::new(Cursor::new(wav)).map_err(|error| format!("invalid WAV: {error}"))?;
-    let spec = reader.spec();
-    let channels = spec.channels.max(1) as usize;
-    let interleaved = match spec.sample_format {
-        hound::SampleFormat::Float => reader
-            .samples::<f32>()
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|error| format!("WAV decode failed: {error}"))?,
-        hound::SampleFormat::Int => {
-            let scale = 2_f32.powi(spec.bits_per_sample.saturating_sub(1) as i32);
-            reader
-                .samples::<i32>()
-                .map(|sample| sample.map(|sample| sample as f32 / scale))
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(|error| format!("WAV decode failed: {error}"))?
-        }
-    };
+fn decode_audio(audio: &[u8]) -> Result<(Vec<f32>, usize, u32), String> {
+    let decoder = rodio::Decoder::new(BufReader::new(Cursor::new(audio.to_vec())))
+        .map_err(|error| format!("unsupported or invalid WAV/MP3/M4A: {error}"))?;
+    let channels = decoder.channels().max(1) as usize;
+    let sample_rate = decoder.sample_rate();
+    let interleaved = decoder.convert_samples::<f32>().collect::<Vec<_>>();
+    Ok((interleaved, channels, sample_rate))
+}
+
+fn enqueue_audio(audio: &[u8], mixer: &Mixer) -> Result<usize, String> {
+    let (interleaved, channels, sample_rate) = decode_audio(audio)?;
     let mono = interleaved
         .chunks(channels)
         .map(|frame| frame.iter().sum::<f32>() / frame.len() as f32)
         .collect::<Vec<_>>();
-    let ratio = spec.sample_rate as f64 / mixer.output_rate as f64;
+    let ratio = sample_rate as f64 / mixer.output_rate as f64;
     let output_len = ((mono.len() as f64) / ratio).ceil() as usize;
     if output_len
         > mixer
@@ -666,13 +856,54 @@ fn enqueue_wav(wav: &[u8], mixer: &Mixer) -> Result<usize, String> {
     Ok(output_len)
 }
 
+fn play_audio(audio: &[u8]) -> Result<(), String> {
+    let (_stream, handle) = rodio::OutputStream::try_default()
+        .map_err(|error| format!("could not open the Windows default playback device: {error}"))?;
+    let sink = rodio::Sink::try_new(&handle)
+        .map_err(|error| format!("could not create playback sink: {error}"))?;
+    let decoder = rodio::Decoder::new(BufReader::new(Cursor::new(audio.to_vec())))
+        .map_err(|error| format!("audio decode failed: {error}"))?;
+    sink.append(decoder.convert_samples::<f32>());
+    sink.sleep_until_end();
+    Ok(())
+}
+
+fn clear_system_audio(mixer: &Mixer) -> usize {
+    [&mixer.system_audio, &mixer.system_audio_http]
+        .into_iter()
+        .filter_map(Option::as_ref)
+        .map(|queue| {
+            let count = queue.len();
+            while queue.pop().is_some() {}
+            count
+        })
+        .sum()
+}
+
 fn json_response(body: String, status: StatusCode) -> Response<Cursor<Vec<u8>>> {
     let header = Header::from_bytes("Content-Type", "application/json; charset=utf-8").unwrap();
-    Response::from_data(body.into_bytes())
-        .with_status_code(status)
-        .with_header(header)
+    cors(
+        Response::from_data(body.into_bytes())
+            .with_status_code(status)
+            .with_header(header),
+    )
 }
 
 fn text_response(body: String, status: StatusCode) -> Response<Cursor<Vec<u8>>> {
-    Response::from_data(body.into_bytes()).with_status_code(status)
+    cors(Response::from_data(body.into_bytes()).with_status_code(status))
+}
+
+fn cors<R: Read + Send + 'static>(response: Response<R>) -> Response<R> {
+    response
+        .with_header(Header::from_bytes("Access-Control-Allow-Origin", "*").unwrap())
+        .with_header(
+            Header::from_bytes("Access-Control-Allow-Methods", "GET, POST, OPTIONS").unwrap(),
+        )
+        .with_header(
+            Header::from_bytes(
+                "Access-Control-Allow-Headers",
+                "Content-Type, Authorization",
+            )
+            .unwrap(),
+        )
 }

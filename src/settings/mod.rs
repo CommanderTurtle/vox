@@ -545,6 +545,11 @@ impl SettingsApp {
                             .desired_width(460.0)
                             .hint_text("Path to .wav, .mp3, or .m4a"),
                     );
+                    if ui.button("Browse…").clicked() {
+                        if let Some(path) = pick_audio_file() {
+                            profile.audio_path = path;
+                        }
+                    }
                 });
                 ui.horizontal(|ui| {
                     ui.label("Transcript:");
@@ -553,6 +558,11 @@ impl SettingsApp {
                             .desired_width(430.0)
                             .hint_text("Path to verbatim UTF-8 .txt"),
                     );
+                    if ui.button("Browse…").clicked() {
+                        if let Some(path) = pick_text_file() {
+                            profile.transcript_path = path;
+                        }
+                    }
                 });
             });
         }
@@ -583,6 +593,11 @@ impl SettingsApp {
                 ui.add(egui::TextEdit::singleline(
                     &mut self.config.tts.longcat.prompt_audio_path,
                 ));
+                if ui.button("Browse…").clicked() {
+                    if let Some(path) = pick_audio_file() {
+                        self.config.tts.longcat.prompt_audio_path = path;
+                    }
+                }
             });
             ui.label("Verbatim reference transcript:");
             ui.add(
@@ -812,7 +827,7 @@ impl SettingsApp {
             ui.label("Lines:");
             ui.add(egui::DragValue::new(&mut self.config.subtitles.max_lines).range(1..=10));
         });
-        ui.label(egui::RichText::new("Launch either CrisperWhisper subtitles or translated English subtitles from the tray. The router captures system playback through WASAPI and never mixes that tap back into the virtual microphone.").small());
+        ui.label(egui::RichText::new("Launch native subtitles, translated subtitles, or translated LongCat dubbing from the tray. The router captures system playback through WASAPI and never mixes that tap back into the virtual microphone.").small());
         ui.add_space(10.0);
 
         ui.label("System prompt:");
@@ -910,4 +925,30 @@ impl SettingsApp {
         ui.checkbox(&mut self.config.general.autostart, "Autostart");
         ui.add_space(16.0);
     }
+}
+
+#[cfg(windows)]
+fn pick_audio_file() -> Option<String> {
+    rfd::FileDialog::new()
+        .add_filter("Audio", &["wav", "mp3", "m4a"])
+        .pick_file()
+        .map(|path| path.to_string_lossy().into_owned())
+}
+
+#[cfg(not(windows))]
+fn pick_audio_file() -> Option<String> {
+    None
+}
+
+#[cfg(windows)]
+fn pick_text_file() -> Option<String> {
+    rfd::FileDialog::new()
+        .add_filter("Text", &["txt"])
+        .pick_file()
+        .map(|path| path.to_string_lossy().into_owned())
+}
+
+#[cfg(not(windows))]
+fn pick_text_file() -> Option<String> {
+    None
 }

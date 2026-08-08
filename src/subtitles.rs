@@ -10,19 +10,29 @@ use crate::asr::crisper_whisper::CrisperWhisperEngine;
 use crate::asr::AsrEngine;
 use crate::config::{Config, ConfigManager};
 use crate::translation::Translator;
+use crate::tts::longcat_tts::LongCatTtsEngine;
+use crate::tts::playback::{self, AudioFormat};
+use crate::tts::TtsEngine;
 
-pub fn run(translate: bool) -> Result<(), Box<dyn std::error::Error>> {
+pub fn run(translate: bool, dub: bool) -> Result<(), Box<dyn std::error::Error>> {
     let manager = ConfigManager::load_or_create()?;
     let config = manager.read().clone();
     let (tx, rx) = std::sync::mpsc::channel();
     let stop = Arc::new(AtomicBool::new(false));
-    spawn_caption_worker(config.clone(), translate, tx, stop.clone());
+    spawn_caption_worker(config.clone(), translate || dub, dub, tx, stop.clone());
 
-    let title = if translate {
+    let title = if dub {
+        "Vox — Live Translated Dubbing"
+    } else if translate {
         "Vox — Live English Subtitles"
     } else {
         "Vox — Live Subtitles"
     };
+    let high_refresh = HighRefreshGuard::new();
+    log::info!(
+        "Subtitle presentation cadence: {} Hz (native display detection)",
+        high_refresh.refresh_hz
+    );
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title(title)
@@ -31,6 +41,8 @@ pub fn run(translate: bool) -> Result<(), Box<dyn std::error::Error>> {
             .with_always_on_top()
             .with_decorations(false)
             .with_transparent(true),
+        vsync: true,
+        hardware_acceleration: eframe::HardwareAcceleration::Required,
         ..Default::default()
     };
     eframe::run_native(
@@ -43,6 +55,7 @@ pub fn run(translate: bool) -> Result<(), Box<dyn std::error::Error>> {
                 stop,
                 font_size: config.subtitles.font_size.clamp(14.0, 72.0),
                 max_lines: config.subtitles.max_lines.clamp(1, 10),
+                high_refresh,
             }))
         }),
     )?;
@@ -55,6 +68,69 @@ struct SubtitleApp {
     stop: Arc<AtomicBool>,
     font_size: f32,
     max_lines: usize,
+    high_refresh: HighRefreshGuard,
+}
+
+struct HighRefreshGuard {
+    refresh_hz: u32,
+    #[cfg(windows)]
+    timer_resolution_active: bool,
+}
+
+impl HighRefreshGuard {
+    fn new() -> Self {
+        #[cfg(windows)]
+        {
+            use windows_sys::Win32::Graphics::Gdi::{
+                EnumDisplaySettingsW, DEVMODEW, ENUM_CURRENT_SETTINGS,
+            };
+            use windows_sys::Win32::Media::{timeBeginPeriod, TIMERR_NOERROR};
+
+            let refresh_hz = unsafe {
+                let mut mode: DEVMODEW = std::mem::zeroed();
+                mode.dmSize = std::mem::size_of::<DEVMODEW>() as u16;
+                if EnumDisplaySettingsW(std::ptr::null(), ENUM_CURRENT_SETTINGS, &mut mode) != 0
+                    && (30..=1000).contains(&mode.dmDisplayFrequency)
+                {
+                    mode.dmDisplayFrequency
+                } else {
+                    60
+                }
+            };
+            let timer_resolution_active = unsafe { timeBeginPeriod(1) == TIMERR_NOERROR };
+            return Self {
+                refresh_hz,
+                timer_resolution_active,
+            };
+        }
+
+        #[cfg(not(windows))]
+        Self { refresh_hz: 60 }
+    }
+
+    fn frame_interval(&self) -> Duration {
+        Duration::from_secs_f64(1.0 / self.refresh_hz.max(1) as f64)
+    }
+
+    fn flush_previous_composition(&self) {
+        #[cfg(windows)]
+        unsafe {
+            // MacroHelp's proven anti-flicker pattern: complete the prior DWM
+            // composition before preparing the next transparent overlay frame.
+            let _ = windows_sys::Win32::Graphics::Dwm::DwmFlush();
+        }
+    }
+}
+
+impl Drop for HighRefreshGuard {
+    fn drop(&mut self) {
+        #[cfg(windows)]
+        if self.timer_resolution_active {
+            unsafe {
+                windows_sys::Win32::Media::timeEndPeriod(1);
+            }
+        }
+    }
 }
 
 impl Drop for SubtitleApp {
@@ -69,6 +145,7 @@ impl eframe::App for SubtitleApp {
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        self.high_refresh.flush_previous_composition();
         let ctx = ui.ctx().clone();
         while let Ok(line) = self.rx.try_recv() {
             if !line.trim().is_empty() {
@@ -107,13 +184,16 @@ impl eframe::App for SubtitleApp {
                     .halign(egui::Align::Center),
                 );
             });
-        ctx.request_repaint_after(Duration::from_millis(75));
+        // The presentation loop follows the detected panel refresh (4.17 ms
+        // at 240 Hz). Inference stays on its worker and never blocks painting.
+        ctx.request_repaint_after(self.high_refresh.frame_interval());
     }
 }
 
 fn spawn_caption_worker(
     config: Config,
     translate: bool,
+    dub: bool,
     sender: std::sync::mpsc::Sender<String>,
     stop: Arc<AtomicBool>,
 ) {
@@ -132,9 +212,10 @@ fn spawn_caption_worker(
                 .expect("subtitle HTTP client");
             let crisper = CrisperWhisperEngine::new(&config.asr.crisper);
             let translator = Translator::new(&config.translate);
+            let longcat = LongCatTtsEngine::new(&config.tts.longcat);
             let seconds = config.subtitles.chunk_seconds.clamp(0.5, 15.0);
             let url = format!(
-                "{}/v1/system-audio/take?min_seconds={seconds}",
+                "{}/v1/system-audio/take?min_seconds={seconds}&latest_seconds={seconds}",
                 config.subtitles.router_url.trim_end_matches('/')
             );
             let mut router_was_down = false;
@@ -187,6 +268,24 @@ fn spawn_caption_worker(
                 } else {
                     transcript
                 };
+                if dub {
+                    match longcat.synthesize(&text).await {
+                        Ok(audio) => {
+                            if let Err(error) = playback::play_bytes(&audio, AudioFormat::Wav) {
+                                log::warn!("Live dubbing playback failed: {error}");
+                            }
+                            // WASAPI loopback hears the dub. Clear it before
+                            // the next chunk so translated speech never feeds
+                            // back into its own recognition lane.
+                            let clear_url = format!(
+                                "{}/v1/system-audio/clear",
+                                config.subtitles.router_url.trim_end_matches('/')
+                            );
+                            let _ = client.post(clear_url).send().await;
+                        }
+                        Err(error) => log::warn!("Live dubbing synthesis failed: {error}"),
+                    }
+                }
                 if sender.send(text).is_err() {
                     break;
                 }

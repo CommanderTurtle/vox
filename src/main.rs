@@ -100,7 +100,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 return cmd_translate(&args[2..]);
             }
             "subtitles" => {
-                return subtitles::run(args[2..].iter().any(|arg| arg == "--translate"));
+                let dub = args[2..].iter().any(|arg| arg == "--dub");
+                return subtitles::run(
+                    dub || args[2..].iter().any(|arg| arg == "--translate"),
+                    dub,
+                );
             }
             _ => {}
         }
@@ -505,8 +509,13 @@ fn handle_tray_event(
             push_tray(ctx, AppState::Idle);
         }
         Ok(TrayEvent::StartSubtitles(translate)) => {
-            if let Err(error) = launch_subtitles(translate) {
+            if let Err(error) = launch_subtitles(translate, false) {
                 log::error!("Could not launch subtitles: {}", error);
+            }
+        }
+        Ok(TrayEvent::StartDubbing) => {
+            if let Err(error) = launch_subtitles(true, true) {
+                log::error!("Could not launch live dubbing: {}", error);
             }
         }
         Ok(TrayEvent::SetRecordMode(mode)) => {
@@ -526,10 +535,12 @@ fn handle_tray_event(
     true
 }
 
-fn launch_subtitles(translate: bool) -> std::io::Result<()> {
+fn launch_subtitles(translate: bool, dub: bool) -> std::io::Result<()> {
     let mut command = std::process::Command::new(std::env::current_exe()?);
     command.arg("subtitles");
-    if translate {
+    if dub {
+        command.arg("--dub");
+    } else if translate {
         command.arg("--translate");
     }
     #[cfg(windows)]

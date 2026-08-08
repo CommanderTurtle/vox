@@ -223,15 +223,29 @@ name = "Second microphone name"
 gain = 1.0
 ```
 
-The router captures both inputs continuously, mixes them with WAVs posted to
+The router captures both inputs continuously, mixes them with WAV, MP3, or
+M4A media posted to
 `POST /v1/forward`, and renders the result to `output_device`. For a virtual
 microphone, this must be the playback side of an installed virtual cable;
 choose that cable's capture side as the Windows/application microphone. The
 physical mic remains an ordinary, live input to the mix.
 
+Running the router normally opens its small native control window. Paste or
+**Browse…** to any `.wav`, `.mp3`, or `.m4a`, then choose **Hoist to
+microphone**. Use `--headless` when only the local HTTP boundary is wanted.
+`POST /v1/playback` sends media to the current Windows default playback
+device. The router opens every configured endpoint in its native Windows
+shared-mode format; it does no codec recompression. It downmixes the microphone
+bus and resamples only when endpoint rates differ. Restart it after changing
+Windows' default input/output devices. Bluetooth headset profile selection
+remains owned by Windows and is therefore the practical quality ceiling for
+AirPods or other Bluetooth microphones.
+
 The independent WASAPI loopback tap captures `system_audio_device` for
 captions and never enters the routed microphone mix. Health and device data
-are available at `/health` and `/v1/devices`.
+are available at `/health` and `/v1/devices`. Capture is fanned into separate
+desktop and `vox-http` consumer lanes, so both processes may remain active and
+request subtitles/dubbing without draining one another's audio windows.
 
 ## Live system-audio subtitles
 
@@ -241,6 +255,9 @@ Then use the tray's **Live System-Audio Subtitles** submenu:
 - **CrisperWhisper subtitles**: system speaker → intended/literal transcript.
 - **Translated English subtitles**: system speaker → transcript → local
   translator → final English line.
+- **Translated subtitles + LongCat dub**: the translated final line is spoken
+  to the Windows default output. The router clears loopback audio captured
+  during playback so the dub cannot recursively transcribe itself.
 
 The native borderless overlay is movable, always on top, and closes with
 Escape. Its rolling-window settings live in executable-local `config.toml`:
@@ -248,12 +265,18 @@ Escape. Its rolling-window settings live in executable-local `config.toml`:
 ```toml
 [subtitles]
 router_url = "http://127.0.0.1:8182"
-chunk_seconds = 3.0
+chunk_seconds = 1.5
 font_size = 30.0
 max_lines = 3
 ```
 
-The router, CrisperWhisper model, and translator all remain warm between
+The router keeps only the newest bounded audio window for each inference pass,
+preventing slow ASR/translation from accumulating a stale queue. The overlay
+detects the native display cadence on launch, enables Windows' 1 ms timer
+resolution, and uses DWM-flushed, GPU-backed, vsynced presentation (4.17 ms on
+a 240 Hz panel). It remains DPI-aware through native egui/winit and does not
+use WinUI animation. The router,
+CrisperWhisper model, translator, and LongCat service remain warm between
 windows. The translation parser intentionally keeps only the final meaningful
 model-output line, discarding headings such as “here is your translation.”
 

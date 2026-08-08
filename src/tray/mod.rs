@@ -39,6 +39,7 @@ pub enum TrayEvent {
     SetTranslateTarget(String),
     SetCrisperMode(String),
     StartSubtitles(bool),
+    StartDubbing,
     /// "ptt" | "toggle"
     SetRecordMode(String),
 }
@@ -106,6 +107,7 @@ const ID_LONGCAT_SEED_DECREMENT: &str = "longcat-seed-decrement";
 const ID_LONGCAT_SEED_INCREMENT: &str = "longcat-seed-increment";
 const ID_SUBTITLES_NATIVE: &str = "subtitles-native";
 const ID_SUBTITLES_ENGLISH: &str = "subtitles-english";
+const ID_DUB_ENGLISH: &str = "dub-english";
 
 fn asr_id(name: &str) -> String {
     format!("asr:{}", name)
@@ -378,6 +380,12 @@ fn build_menu(m: &MenuModel) -> Menu {
         true,
         None,
     ));
+    let _ = subtitles_menu.append(&MenuItem::with_id(
+        ID_DUB_ENGLISH,
+        "Translated subtitles + LongCat dub",
+        true,
+        None,
+    ));
     let _ = menu.append(&subtitles_menu);
 
     let _ = menu.append(&PredefinedMenuItem::separator());
@@ -426,6 +434,9 @@ fn map_event(id: &str, model: &MenuModel) -> Option<TrayEvent> {
     }
     if id == ID_SUBTITLES_ENGLISH {
         return Some(TrayEvent::StartSubtitles(true));
+    }
+    if id == ID_DUB_ENGLISH {
+        return Some(TrayEvent::StartDubbing);
     }
     if let Some(name) = id.strip_prefix("asr:") {
         if model.asr_engines.iter().any(|e| e == name) {
