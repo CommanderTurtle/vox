@@ -149,6 +149,12 @@ impl SettingsApp {
             ));
         });
         ui.horizontal(|ui| {
+            ui.label("Seed +1:       ");
+            ui.add(egui::TextEdit::singleline(
+                &mut self.config.hotkey.tts_seed_increment,
+            ));
+        });
+        ui.horizontal(|ui| {
             ui.label("Translate Text:");
             ui.add(egui::TextEdit::singleline(
                 &mut self.config.hotkey.translate_text,

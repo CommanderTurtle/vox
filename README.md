@@ -116,12 +116,13 @@ startup sequence, settings, CLI checks, and service ownership boundaries.
 | Switch ASR engine  | <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>E</kbd> | Cycle through available engines                      |
 | Switch inject mode | <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>V</kbd> | Toggle keyboard / clipboard injection                |
 | TTS trigger        | <kbd>Alt</kbd>+<kbd>T</kbd>                  | Read selected text (or clipboard) aloud              |
+| Switch voice pair  | <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>T</kbd> | Cycle saved LongCat audio + transcript pairs         |
+| LongCat seed +1    | <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>S</kbd> | Increment the persisted LongCat seed by one          |
 | Translate text     | <kbd>Alt</kbd>+<kbd>R</kbd>                  | Translate selection/clipboard, then inject           |
 | Translate + TTS    | <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>R</kbd> | Translate selection/clipboard, then speak            |
 | Speech translate → text | <kbd>Alt</kbd>+<kbd>Ctrl</kbd>+<kbd>R</kbd> | Transcribe, translate with active route, then inject |
 | Raw speech → TTS   | <kbd>Alt</kbd>+<kbd>Ctrl</kbd>+<kbd>`</kbd>  | Transcribe speech and speak it without translation   |
 | Speech translate → TTS | <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>`</kbd> | Transcribe, translate with active route, then speak |
-| Switch voice       | <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>T</kbd> | Cycle named LongCat reference pairs                  |
 | Switch route       | <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>L</kbd> | Toggle inbound/outbound translation                  |
 
 The record hotkey behavior depends on the **Record Mode** (settable in the
@@ -143,7 +144,8 @@ Record Mode  ▸  Push-to-Talk (hold) / Toggle (press)                    (✓ a
 ─────────────
 TTS Engine   ▸  edge-tts / mimo-tts                                      (✓ active)
 TTS Input    ▸  Selection (Ctrl+C) / Clipboard                           (✓ active)
-LongCat Voice ▸  any saved audio + transcript pair                        (✓ active)
+LongCat Voice Pair ▸ each saved .wav/.mp3/.m4a + verbatim .txt pair       (✓ active)
+LongCat Seed (1024) ▸ − 1 / + 1
 Local Translation ▸ Enable / Inbound / Outbound / target language         (✓ active)
 ─────────────
 Toggle Recording
@@ -174,6 +176,7 @@ engine_switch = "Alt+Shift+E"
 inject_mode_switch = "Alt+Shift+V"
 tts_trigger = "Alt+T"
 tts_voice_switch = "Alt+Shift+T"
+tts_seed_increment = "Alt+Shift+S"
 translate_text = "Alt+R"
 translate_tts = "Alt+Shift+R"
 record_translate_text = "Alt+Ctrl+R"

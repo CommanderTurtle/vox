@@ -36,6 +36,8 @@ pub struct HotkeyConfig {
     pub tts_trigger: String,
     #[serde(default = "default_tts_voice_switch")]
     pub tts_voice_switch: String,
+    #[serde(default = "default_tts_seed_increment")]
+    pub tts_seed_increment: String,
     #[serde(default = "default_translate_text")]
     pub translate_text: String,
     #[serde(default = "default_translate_tts")]
@@ -52,6 +54,9 @@ pub struct HotkeyConfig {
 
 fn default_tts_voice_switch() -> String {
     "Alt+Shift+T".to_string()
+}
+fn default_tts_seed_increment() -> String {
+    "Alt+Shift+S".to_string()
 }
 fn default_translate_text() -> String {
     "Alt+R".to_string()

@@ -30,6 +30,7 @@ pub enum TrayEvent {
     SetTtsEngine(String),
     SetTtsInputMode(String),
     SetTtsVoiceProfile(String),
+    AdjustLongCatSeed(i8),
     SetTranslateEnabled(bool),
     SetTranslateRoute(String),
     SetTranslateTarget(String),
@@ -62,6 +63,7 @@ pub struct MenuModel {
     pub tts_input_mode: String,
     pub tts_voice_profiles: Vec<String>,
     pub tts_voice_active: String,
+    pub tts_longcat_seed: u64,
     pub translate_enabled: bool,
     pub translate_route: String,
     pub translate_target: String,
@@ -90,6 +92,8 @@ const ID_TOGGLE: &str = "toggle";
 const ID_SETTINGS: &str = "settings";
 const ID_QUIT: &str = "quit";
 const ID_TRANSLATE_ENABLED: &str = "translate-enabled";
+const ID_LONGCAT_SEED_DECREMENT: &str = "longcat-seed-decrement";
+const ID_LONGCAT_SEED_INCREMENT: &str = "longcat-seed-increment";
 
 fn asr_id(name: &str) -> String {
     format!("asr:{}", name)
@@ -221,8 +225,15 @@ fn build_menu(m: &MenuModel) -> Menu {
     }
     let _ = menu.append(&ttsinput_menu);
 
-    if !m.tts_voice_profiles.is_empty() {
-        let voice_menu = Submenu::new("LongCat Voice", true);
+    let voice_menu = Submenu::new("LongCat Voice Pair", true);
+    if m.tts_voice_profiles.is_empty() {
+        let _ = voice_menu.append(&MenuItem::with_id(
+            "longcat-voice-empty",
+            "No saved pairs — add one in Settings",
+            false,
+            None,
+        ));
+    } else {
         for name in &m.tts_voice_profiles {
             let _ = voice_menu.append(&CheckMenuItem::with_id(
                 ttsvoice_id(name),
@@ -232,8 +243,23 @@ fn build_menu(m: &MenuModel) -> Menu {
                 None,
             ));
         }
-        let _ = menu.append(&voice_menu);
     }
+    let _ = menu.append(&voice_menu);
+
+    let seed_menu = Submenu::new(format!("LongCat Seed ({})", m.tts_longcat_seed), true);
+    let _ = seed_menu.append(&MenuItem::with_id(
+        ID_LONGCAT_SEED_DECREMENT,
+        "− 1",
+        true,
+        None,
+    ));
+    let _ = seed_menu.append(&MenuItem::with_id(
+        ID_LONGCAT_SEED_INCREMENT,
+        "+ 1",
+        true,
+        None,
+    ));
+    let _ = menu.append(&seed_menu);
 
     // Translation stays visible even while disabled so a first-run user can
     // discover and configure the local backend without editing TOML.
@@ -319,6 +345,12 @@ fn map_event(id: &str, model: &MenuModel) -> Option<TrayEvent> {
     }
     if id == ID_TRANSLATE_ENABLED {
         return Some(TrayEvent::SetTranslateEnabled(!model.translate_enabled));
+    }
+    if id == ID_LONGCAT_SEED_DECREMENT {
+        return Some(TrayEvent::AdjustLongCatSeed(-1));
+    }
+    if id == ID_LONGCAT_SEED_INCREMENT {
+        return Some(TrayEvent::AdjustLongCatSeed(1));
     }
     if let Some(name) = id.strip_prefix("asr:") {
         if model.asr_engines.iter().any(|e| e == name) {

@@ -156,9 +156,15 @@ transcript at synthesis time and uploads that reference pair to the local
 LongCat service for each segment; the service's established WebUI and lazy
 load/unload behavior remain unchanged.
 
-The active pair is switchable from the tray or the configurable
-`tts_voice_switch` hotkey. The old `prompt_audio_path` + inline `prompt_text`
-fields remain a fallback only when no named profiles exist.
+The tray always exposes `LongCat Voice Pair`. Every saved pair is a basic
+checkmarked item; when no pairs exist, it points the user to Settings. The
+active pair is also switchable with the configurable `tts_voice_switch`
+hotkey (`Alt+Shift+T` by default). `LongCat Seed (<current>)` provides direct
+`− 1` and `+ 1` actions, while `tts_seed_increment` (`Alt+Shift+S`) advances
+the persisted seed by one. Each change rebuilds only the TTS adapters and is
+available to the next synthesis without restarting Vox. The old
+`prompt_audio_path` + inline `prompt_text` fields remain a fallback only when
+no named profiles exist.
 
 Long text is split on sentence boundaries. Oversized sentences fall back to
 word boundaries and CJK text falls back to character boundaries. Vox ports

@@ -123,6 +123,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         inject_switch_binding,
         tts_binding,
         tts_voice_binding,
+        tts_seed_binding,
         translate_text_binding,
         translate_tts_binding,
         record_translate_tts_binding,
@@ -145,6 +146,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let tts = HotkeyBinding::parse(tts_str).expect("Invalid tts_trigger hotkey config");
         let voice = HotkeyBinding::parse(&cfg.hotkey.tts_voice_switch)
             .expect("Invalid tts_voice_switch hotkey config");
+        let seed = HotkeyBinding::parse(&cfg.hotkey.tts_seed_increment)
+            .expect("Invalid tts_seed_increment hotkey config");
         let translate_text = HotkeyBinding::parse(&cfg.hotkey.translate_text)
             .expect("Invalid translate_text hotkey config");
         let translate_tts = HotkeyBinding::parse(&cfg.hotkey.translate_tts)
@@ -163,6 +166,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             inject,
             tts,
             voice,
+            seed,
             translate_text,
             translate_tts,
             record_translate_tts,
@@ -186,7 +190,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // ── Build system tray (dedicated thread with message pump) ───────────
     let (tray_event_sender, tray_event_receiver) = channel::unbounded::<TrayEvent>();
 
-    let (tts_voice_profiles, tts_voice_active) = longcat_voice_menu(&config_mgr);
+    let (tts_voice_profiles, tts_voice_active, tts_longcat_seed) = longcat_voice_menu(&config_mgr);
     let (translate_enabled, translate_route, translate_target) = translation_menu(&config_mgr);
     let crisper_mode = config_mgr.read().asr.crisper.mode.clone();
     let initial_model = MenuModel {
@@ -198,6 +202,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         tts_input_mode: tts_input_mode.as_str().to_string(),
         tts_voice_profiles,
         tts_voice_active,
+        tts_longcat_seed,
         translate_enabled,
         translate_route,
         translate_target,
@@ -217,6 +222,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         inject_switch_binding,
         tts_binding,
         tts_voice_binding,
+        tts_seed_binding,
         translate_text_binding,
         translate_tts_binding,
         record_translate_tts_binding,
@@ -291,7 +297,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 /// Build a snapshot of the tray menu model from the live context.
 fn build_menu_model(ctx: &AppCtx, app_state: AppState) -> MenuModel {
-    let (tts_voice_profiles, tts_voice_active) = longcat_voice_menu(&ctx.config_mgr);
+    let (tts_voice_profiles, tts_voice_active, tts_longcat_seed) =
+        longcat_voice_menu(&ctx.config_mgr);
     let (translate_enabled, translate_route, translate_target) = translation_menu(&ctx.config_mgr);
     let crisper_mode = ctx.config_mgr.read().asr.crisper.mode.clone();
     MenuModel {
@@ -303,6 +310,7 @@ fn build_menu_model(ctx: &AppCtx, app_state: AppState) -> MenuModel {
         tts_input_mode: ctx.tts_input_mode.as_str().to_string(),
         tts_voice_profiles,
         tts_voice_active,
+        tts_longcat_seed,
         translate_enabled,
         translate_route,
         translate_target,
@@ -392,6 +400,24 @@ fn handle_tray_event(
                     cfg.tts.longcat.active_voice_profile = name;
                 }
             }
+            let _ = ctx.config_mgr.save();
+            rebuild_tts_manager(ctx);
+            push_tray(ctx, AppState::Idle);
+        }
+        Ok(TrayEvent::AdjustLongCatSeed(delta)) => {
+            let seed = {
+                let mut cfg = ctx.config_mgr.write();
+                cfg.tts.longcat.seed = if delta.is_negative() {
+                    cfg.tts
+                        .longcat
+                        .seed
+                        .saturating_sub(delta.unsigned_abs() as u64)
+                } else {
+                    cfg.tts.longcat.seed.saturating_add(delta as u64)
+                };
+                cfg.tts.longcat.seed
+            };
+            log::info!("LongCat seed: {}", seed);
             let _ = ctx.config_mgr.save();
             rebuild_tts_manager(ctx);
             push_tray(ctx, AppState::Idle);
@@ -514,6 +540,17 @@ fn handle_hotkey_event(ctx: &mut AppCtx, event: HotkeyEvent) {
             } else {
                 log::warn!("[Hotkey] No named LongCat voice profiles configured");
             }
+        }
+        HotkeyEvent::TtsSeedIncrement => {
+            let seed = {
+                let mut cfg = ctx.config_mgr.write();
+                cfg.tts.longcat.seed = cfg.tts.longcat.seed.saturating_add(1);
+                cfg.tts.longcat.seed
+            };
+            log::info!("[Hotkey] LongCat seed: {}", seed);
+            let _ = ctx.config_mgr.save();
+            rebuild_tts_manager(ctx);
+            push_tray(ctx, AppState::Idle);
         }
         HotkeyEvent::TranslateText => {
             log::info!("[Hotkey] Translate selected text");
@@ -912,7 +949,7 @@ fn apply_settings(ctx: &mut AppCtx, new_cfg: config::Config) {
     );
 }
 
-fn longcat_voice_menu(config_mgr: &ConfigManager) -> (Vec<String>, String) {
+fn longcat_voice_menu(config_mgr: &ConfigManager) -> (Vec<String>, String, u64) {
     let cfg = config_mgr.read();
     let profiles = cfg
         .tts
@@ -921,7 +958,11 @@ fn longcat_voice_menu(config_mgr: &ConfigManager) -> (Vec<String>, String) {
         .iter()
         .map(|profile| profile.name.clone())
         .collect();
-    (profiles, cfg.tts.longcat.active_voice_name())
+    (
+        profiles,
+        cfg.tts.longcat.active_voice_name(),
+        cfg.tts.longcat.seed,
+    )
 }
 
 fn translation_menu(config_mgr: &ConfigManager) -> (bool, String, String) {
