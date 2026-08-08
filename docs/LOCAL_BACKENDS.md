@@ -230,8 +230,21 @@ cargo build --release --features mic-forwarder --bin vox-mic-forwarder
 .\target\release\vox-mic-forwarder.exe --init-config
 ```
 
-`mic-forwarder.toml` is created beside the router executable. Configure an
-exact device name (or a unique fragment):
+`--init-config` is an interactive, numbered device wizard. It saves exact
+device names into `mic-forwarder.toml` beside the router executable and does
+not require hand-written TOML. Select one or more physical microphones as
+inputs. For the output, select the playback endpoint of a virtual audio cable;
+the recording endpoint belonging to that cable is what another application
+uses as its microphone.
+
+If `--list-devices` shows only ordinary speakers/headphones, Windows has no
+virtual microphone path available yet. The Rust router cannot create a Windows
+audio driver from user space. Install or enable a virtual cable, rerun
+`--list-devices`, and then rerun `--init-config`. Selecting headphones or
+speakers is useful only for monitoring/testing and does not create a selectable
+microphone.
+
+The generated file is equivalent to:
 
 ```toml
 bind = "127.0.0.1:8182"

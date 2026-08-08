@@ -68,6 +68,11 @@ part of an ordinary Vox build:
 cargo build --release --features mic-forwarder --bin vox-mic-forwarder
 ```
 
+Then run `vox-mic-forwarder.exe --init-config`. Its numbered wizard selects
+the physical input microphone and the virtual-cable output and writes the
+executable-local TOML automatically. `--list-devices` marks Windows defaults
+and warns when no virtual audio endpoint is installed.
+
 The private backend-only gateway is an equally optional workspace member. It
 shares CrisperWhisper and LongCat behavior with desktop Vox without pulling in
 the tray, hotkeys, clipboard, GUI, capture, or device dependencies:
