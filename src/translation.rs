@@ -169,9 +169,45 @@ impl Translator {
             .choices
             .into_iter()
             .next()
-            .map(|choice| choice.message.content.trim().to_string())
+            .and_then(|choice| final_translation_line(&choice.message.content))
             .filter(|content| !content.is_empty())
             .ok_or_else(|| TranslationError::InvalidResponse("empty completion".into()))?;
         Ok(translated)
+    }
+}
+
+/// Small instruction-tuned text encoders occasionally preface their answer
+/// with a Markdown heading. The requested translation is always the final
+/// meaningful line; ignore blank lines and closing code fences.
+fn final_translation_line(content: &str) -> Option<String> {
+    content
+        .lines()
+        .rev()
+        .map(str::trim)
+        .find(|line| !line.is_empty() && !line.starts_with("```"))
+        .map(|line| line.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::final_translation_line;
+
+    #[test]
+    fn keeps_only_final_meaningful_translation_line() {
+        assert_eq!(
+            final_translation_line(
+                "**Prompt Engineer & Translator Output:**\n\nWhat is Florida sunshine for?\n"
+            )
+            .as_deref(),
+            Some("What is Florida sunshine for?")
+        );
+    }
+
+    #[test]
+    fn ignores_a_closing_markdown_fence() {
+        assert_eq!(
+            final_translation_line("```text\nNatural translated sentence.\n```").as_deref(),
+            Some("Natural translated sentence.")
+        );
     }
 }

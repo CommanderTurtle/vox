@@ -466,6 +466,42 @@ impl SettingsApp {
                     "Clipboard",
                 );
             });
+        egui::ComboBox::from_label("Synthesized audio output")
+            .selected_text(match self.config.tts.output.mode.as_str() {
+                "clipboard_wav" => "Clipboard WAV file",
+                "mic_forwarder" => "Microphone router",
+                _ => "Speakers",
+            })
+            .show_ui(ui, |ui| {
+                ui.selectable_value(
+                    &mut self.config.tts.output.mode,
+                    "playback".to_string(),
+                    "Speakers",
+                );
+                ui.selectable_value(
+                    &mut self.config.tts.output.mode,
+                    "clipboard_wav".to_string(),
+                    "Clipboard WAV file",
+                );
+                ui.selectable_value(
+                    &mut self.config.tts.output.mode,
+                    "mic_forwarder".to_string(),
+                    "Microphone router",
+                );
+            });
+        ui.horizontal(|ui| {
+            ui.label("Router URL:");
+            ui.add(
+                egui::TextEdit::singleline(&mut self.config.tts.output.mic_forwarder_url)
+                    .desired_width(330.0),
+            );
+        });
+        ui.label(
+            egui::RichText::new(
+                "Clipboard output publishes vox-output.wav as a pasteable Windows file. The router is the separately built native mixer.",
+            )
+            .small(),
+        );
         ui.add_space(6.0);
 
         ui.label(egui::RichText::new("LongCat (local voice clone)").strong());
@@ -583,14 +619,18 @@ impl SettingsApp {
             ui.add(
                 egui::DragValue::new(&mut self.config.tts.longcat.duration_scale).range(0.5..=2.0),
             );
-            ui.label("Max chunk:");
+        });
+        ui.horizontal(|ui| {
+            ui.checkbox(
+                &mut self.config.tts.longcat.concatenate_chunks,
+                "Automatically concatenate bounded LongCat requests",
+            );
+            ui.label("Words per request:");
             ui.add(
-                egui::DragValue::new(&mut self.config.tts.longcat.max_chunk_seconds)
-                    .range(1.0..=20.0)
-                    .suffix("s"),
+                egui::DragValue::new(&mut self.config.tts.longcat.words_per_chunk).range(1..=250),
             );
         });
-        ui.label(egui::RichText::new("Vox sentence-splits every request at or below 20 seconds; reference conditioning receives an additional safety margin.").small());
+        ui.label(egui::RichText::new("When enabled, Vox sends word-bounded requests and joins their WAVs in order. When disabled, LongCat receives the complete text in one request. CJK characters count as units.").small());
         ui.add_space(6.0);
 
         // Edge TTS
@@ -750,6 +790,29 @@ impl SettingsApp {
             "Switch inbound/outbound route: {}",
             self.config.hotkey.translate_route_switch
         ));
+        ui.add_space(10.0);
+
+        ui.label(egui::RichText::new("Live system-audio subtitles").strong());
+        ui.horizontal(|ui| {
+            ui.label("Microphone router:");
+            ui.add(
+                egui::TextEdit::singleline(&mut self.config.subtitles.router_url)
+                    .desired_width(330.0),
+            );
+        });
+        ui.horizontal(|ui| {
+            ui.label("Rolling audio window:");
+            ui.add(
+                egui::DragValue::new(&mut self.config.subtitles.chunk_seconds)
+                    .range(0.5..=15.0)
+                    .suffix("s"),
+            );
+            ui.label("Font:");
+            ui.add(egui::DragValue::new(&mut self.config.subtitles.font_size).range(14.0..=72.0));
+            ui.label("Lines:");
+            ui.add(egui::DragValue::new(&mut self.config.subtitles.max_lines).range(1..=10));
+        });
+        ui.label(egui::RichText::new("Launch either CrisperWhisper subtitles or translated English subtitles from the tray. The router captures system playback through WASAPI and never mixes that tap back into the virtual microphone.").small());
         ui.add_space(10.0);
 
         ui.label("System prompt:");

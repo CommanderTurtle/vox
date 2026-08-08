@@ -22,7 +22,45 @@ pub struct Config {
     pub tts: TtsConfig,
     #[serde(default)]
     pub translate: TranslateConfig,
+    #[serde(default)]
+    pub subtitles: SubtitleConfig,
     pub general: GeneralConfig,
+}
+
+/// Local system-audio caption surface. Audio is supplied by the native
+/// router's isolated WASAPI loopback tap, then sent to the already configured
+/// CrisperWhisper and optional translation services.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct SubtitleConfig {
+    #[serde(default = "default_mic_forwarder_url")]
+    pub router_url: String,
+    #[serde(default = "default_subtitle_chunk_seconds")]
+    pub chunk_seconds: f32,
+    #[serde(default = "default_subtitle_font_size")]
+    pub font_size: f32,
+    #[serde(default = "default_subtitle_max_lines")]
+    pub max_lines: usize,
+}
+
+fn default_subtitle_chunk_seconds() -> f32 {
+    3.0
+}
+fn default_subtitle_font_size() -> f32 {
+    30.0
+}
+fn default_subtitle_max_lines() -> usize {
+    3
+}
+
+impl Default for SubtitleConfig {
+    fn default() -> Self {
+        Self {
+            router_url: default_mic_forwarder_url(),
+            chunk_seconds: default_subtitle_chunk_seconds(),
+            font_size: default_subtitle_font_size(),
+            max_lines: default_subtitle_max_lines(),
+        }
+    }
 }
 
 /// Hotkey bindings (stored as human-readable strings like "Alt+`").
@@ -282,6 +320,8 @@ pub struct TtsConfig {
     #[serde(default)]
     pub input_mode: String,
     #[serde(default)]
+    pub output: TtsOutputConfig,
+    #[serde(default)]
     pub mimo: MimoTtsConfig,
     #[serde(default)]
     pub edge: EdgeTtsConfig,
@@ -296,10 +336,39 @@ impl Default for TtsConfig {
         Self {
             primary_engine: "edge-tts".to_string(),
             input_mode: "selection".to_string(),
+            output: TtsOutputConfig::default(),
             mimo: MimoTtsConfig::default(),
             edge: EdgeTtsConfig::default(),
             doubao: DoubaoTtsConfig::default(),
             longcat: LongCatTtsConfig::default(),
+        }
+    }
+}
+
+/// Destination for synthesized audio. Playback preserves Vox's original
+/// behavior; clipboard_wav publishes a pasteable WAV file; mic_forwarder
+/// sends WAV to the separately built local audio router.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct TtsOutputConfig {
+    #[serde(default = "default_tts_output_mode")]
+    pub mode: String,
+    #[serde(default = "default_mic_forwarder_url")]
+    pub mic_forwarder_url: String,
+}
+
+fn default_tts_output_mode() -> String {
+    "playback".to_string()
+}
+
+fn default_mic_forwarder_url() -> String {
+    "http://127.0.0.1:8182".to_string()
+}
+
+impl Default for TtsOutputConfig {
+    fn default() -> Self {
+        Self {
+            mode: default_tts_output_mode(),
+            mic_forwarder_url: default_mic_forwarder_url(),
         }
     }
 }
@@ -330,8 +399,15 @@ pub struct LongCatTtsConfig {
     pub seed: u64,
     #[serde(default = "default_longcat_duration_scale")]
     pub duration_scale: f32,
-    #[serde(default = "default_longcat_max_chunk_seconds")]
-    pub max_chunk_seconds: f32,
+    /// Split long synthesis into bounded requests and concatenate their WAVs.
+    /// Disabling this sends the complete text as one LongCat request.
+    #[serde(default = "default_true")]
+    pub concatenate_chunks: bool,
+    /// Maximum word-like units in each request when concatenation is enabled.
+    /// CJK characters count individually because those languages do not
+    /// necessarily use spaces between words.
+    #[serde(default = "default_longcat_words_per_chunk")]
+    pub words_per_chunk: usize,
 }
 
 /// One reusable LongCat voice-conditioning pair. The transcript is kept as a
@@ -399,8 +475,8 @@ fn default_longcat_seed() -> u64 {
 fn default_longcat_duration_scale() -> f32 {
     1.0
 }
-fn default_longcat_max_chunk_seconds() -> f32 {
-    20.0
+fn default_longcat_words_per_chunk() -> usize {
+    35
 }
 
 impl Default for LongCatTtsConfig {
@@ -416,7 +492,8 @@ impl Default for LongCatTtsConfig {
             guidance_method: default_longcat_guidance_method(),
             seed: default_longcat_seed(),
             duration_scale: default_longcat_duration_scale(),
-            max_chunk_seconds: default_longcat_max_chunk_seconds(),
+            concatenate_chunks: true,
+            words_per_chunk: default_longcat_words_per_chunk(),
         }
     }
 }

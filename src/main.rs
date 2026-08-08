@@ -8,6 +8,7 @@ mod audio;
 mod config;
 mod inject;
 mod settings;
+mod subtitles;
 mod translation;
 mod tray;
 mod tts;
@@ -97,6 +98,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             "translate" => {
                 return cmd_translate(&args[2..]);
+            }
+            "subtitles" => {
+                return subtitles::run(args[2..].iter().any(|arg| arg == "--translate"));
             }
             _ => {}
         }
@@ -204,6 +208,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         tts_engines: tts_mgr.engine_names(),
         tts_active: tts_mgr.active_engine(),
         tts_input_mode: tts_input_mode.as_str().to_string(),
+        tts_output: config_mgr.read().tts.output.mode.clone(),
         tts_voice_profiles,
         tts_voice_active,
         tts_longcat_seed,
@@ -314,6 +319,7 @@ fn build_menu_model(ctx: &AppCtx, app_state: AppState) -> MenuModel {
         tts_engines: ctx.tts_mgr.engine_names(),
         tts_active: ctx.tts_mgr.active_engine(),
         tts_input_mode: ctx.tts_input_mode.as_str().to_string(),
+        tts_output: ctx.config_mgr.read().tts.output.mode.clone(),
         tts_voice_profiles,
         tts_voice_active,
         tts_longcat_seed,
@@ -410,6 +416,15 @@ fn handle_tray_event(
             let _ = ctx.config_mgr.save();
             push_tray(ctx, AppState::Idle);
         }
+        Ok(TrayEvent::SetTtsOutput(mode)) => {
+            log::info!("Switching TTS output to: {}", mode);
+            {
+                let mut cfg = ctx.config_mgr.write();
+                cfg.tts.output.mode = mode;
+            }
+            let _ = ctx.config_mgr.save();
+            push_tray(ctx, AppState::Idle);
+        }
         Ok(TrayEvent::SetTtsVoiceProfile(name)) => {
             log::info!("Switching LongCat voice profile to: {}", name);
             {
@@ -489,6 +504,11 @@ fn handle_tray_event(
             ctx.asr_mgr = Arc::new(build_asr_manager(&ctx.config_mgr));
             push_tray(ctx, AppState::Idle);
         }
+        Ok(TrayEvent::StartSubtitles(translate)) => {
+            if let Err(error) = launch_subtitles(translate) {
+                log::error!("Could not launch subtitles: {}", error);
+            }
+        }
         Ok(TrayEvent::SetRecordMode(mode)) => {
             log::info!("Switching record mode to: {}", mode);
             ctx.record_mode = RecordMode::from_str(&mode);
@@ -504,6 +524,21 @@ fn handle_tray_event(
         Err(_) => return false,
     }
     true
+}
+
+fn launch_subtitles(translate: bool) -> std::io::Result<()> {
+    let mut command = std::process::Command::new(std::env::current_exe()?);
+    command.arg("subtitles");
+    if translate {
+        command.arg("--translate");
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    }
+    command.spawn()?;
+    Ok(())
 }
 
 /// Handle a hotkey event.
@@ -733,6 +768,7 @@ fn speak_text(ctx: &AppCtx, text: String, translate: bool) {
     let translator = ctx.translator.clone();
     let active = ctx.tts_mgr.active_engine();
     let fmt = ctx.tts_mgr.output_format();
+    let output = ctx.config_mgr.read().tts.output.clone();
     ctx.runtime.spawn(async move {
         let text = if translate {
             match translator.translate(&text).await {
@@ -749,7 +785,9 @@ fn speak_text(ctx: &AppCtx, text: String, translate: bool) {
         match result {
             Ok(audio) => {
                 log::info!("TTS synthesized {} bytes of audio ({:?})", audio.len(), fmt);
-                tts::playback::play_bytes_async(audio, fmt);
+                if let Err(error) = tts::output::deliver(audio, fmt, output).await {
+                    log::error!("TTS output failed: {}", error);
+                }
             }
             Err(e) => {
                 log::error!("TTS synthesis (engine '{}') failed: {}", active, e);
@@ -773,11 +811,14 @@ fn trigger_translate(ctx: &mut AppCtx, speak: bool) {
     let result_tx = ctx.asr_result_tx.clone();
     let tts_mgr = ctx.tts_mgr.clone();
     let fmt = ctx.tts_mgr.output_format();
+    let output = ctx.config_mgr.read().tts.output.clone();
     ctx.runtime.spawn(async move {
         match translator.translate(&text).await {
             Ok(translated) if speak => match tts_mgr.synthesize(&translated).await {
                 Ok(audio) => {
-                    tts::playback::play_bytes_async(audio, fmt);
+                    if let Err(error) = tts::output::deliver(audio, fmt, output).await {
+                        log::error!("Translated TTS output failed: {}", error);
+                    }
                     let _ = result_tx.send(AsrResult::Completed);
                 }
                 Err(error) => {
@@ -1080,6 +1121,7 @@ fn cmd_tts(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     let text = args[0].clone();
 
     let config_mgr = ConfigManager::load_or_create()?;
+    let output = config_mgr.read().tts.output.clone();
     let tts_mgr = build_tts_manager(&config_mgr);
     log::info!("TTS engine: {}", tts_mgr.active_engine());
 
@@ -1095,9 +1137,9 @@ fn cmd_tts(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     std::fs::write(&path, &audio)?;
     log::info!("Wrote {} bytes ({:?}) to {}", audio.len(), fmt, path);
 
-    log::info!("Playing back...");
-    tts::playback::play_bytes(&audio, fmt)?;
-    log::info!("Playback finished.");
+    log::info!("Delivering through TTS output mode '{}'...", output.mode);
+    rt.block_on(tts::output::deliver(audio, fmt, output))?;
+    log::info!("TTS output complete.");
     Ok(())
 }
 

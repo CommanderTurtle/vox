@@ -70,6 +70,9 @@ tempfile = "3"
 # Native audio playback (decodes & plays WAV/MP3 in-process, no external player)
 rodio = { version = "0.20", default-features = false, features = ["wav", "mp3"] }
 
+# Tiny local API used only by the separately built native microphone router.
+tiny_http = { version = "0.12", optional = true }
+
 # GUI for settings window
 egui = "0.34"
 # eframe needs explicit winit backends (x11 + wayland) on Linux, otherwise
@@ -82,6 +85,12 @@ winit = { version = "0.30", default-features = false }
 default = ["cloud-asr"]
 whisper-local = ["dep:whisper-rs"]
 cloud-asr = []
+mic-forwarder = ["dep:tiny_http"]
+
+[[bin]]
+name = "vox-mic-forwarder"
+path = "src/bin/vox-mic-forwarder.rs"
+required-features = ["mic-forwarder"]
 
 [dependencies.whisper-rs]
 version = "0.13"
@@ -90,6 +99,7 @@ optional = true
 # Target-specific: Windows message pump for tray icon right-click
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = ["Win32_UI_WindowsAndMessaging"] }
+clipboard-win = "5.4"
 
 # Disable unused build artifacts to reduce compile time
 [profile.release]

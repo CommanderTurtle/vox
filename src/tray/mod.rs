@@ -31,12 +31,14 @@ pub enum TrayEvent {
     OpenSettings,
     SetTtsEngine(String),
     SetTtsInputMode(String),
+    SetTtsOutput(String),
     SetTtsVoiceProfile(String),
     AdjustLongCatSeed(i8),
     SetTranslateEnabled(bool),
     SetTranslateRoute(String),
     SetTranslateTarget(String),
     SetCrisperMode(String),
+    StartSubtitles(bool),
     /// "ptt" | "toggle"
     SetRecordMode(String),
 }
@@ -65,6 +67,8 @@ pub struct MenuModel {
     pub tts_active: String,
     /// "selection" | "clipboard"
     pub tts_input_mode: String,
+    /// "playback" | "clipboard_wav" | "mic_forwarder"
+    pub tts_output: String,
     pub tts_voice_profiles: Vec<String>,
     pub tts_voice_active: String,
     pub tts_longcat_seed: u64,
@@ -100,6 +104,8 @@ const ID_RESTORE_CLIPBOARD: &str = "restore-clipboard";
 const ID_COPY_ONLY: &str = "copy-only";
 const ID_LONGCAT_SEED_DECREMENT: &str = "longcat-seed-decrement";
 const ID_LONGCAT_SEED_INCREMENT: &str = "longcat-seed-increment";
+const ID_SUBTITLES_NATIVE: &str = "subtitles-native";
+const ID_SUBTITLES_ENGLISH: &str = "subtitles-english";
 
 fn asr_id(name: &str) -> String {
     format!("asr:{}", name)
@@ -112,6 +118,9 @@ fn tts_id(name: &str) -> String {
 }
 fn ttsinput_id(mode: &str) -> String {
     format!("ttsinput:{}", mode)
+}
+fn ttsoutput_id(mode: &str) -> String {
+    format!("ttsoutput:{}", mode)
 }
 fn ttsvoice_id(name: &str) -> String {
     format!("ttsvoice:{}", name)
@@ -248,6 +257,22 @@ fn build_menu(m: &MenuModel) -> Menu {
     }
     let _ = menu.append(&ttsinput_menu);
 
+    let ttsoutput_menu = Submenu::new("TTS Output", true);
+    for (mode, label) in [
+        ("playback", "Speakers"),
+        ("clipboard_wav", "Clipboard WAV file"),
+        ("mic_forwarder", "Microphone router"),
+    ] {
+        let _ = ttsoutput_menu.append(&CheckMenuItem::with_id(
+            ttsoutput_id(mode),
+            label,
+            true,
+            mode == m.tts_output,
+            None,
+        ));
+    }
+    let _ = menu.append(&ttsoutput_menu);
+
     let voice_menu = Submenu::new("LongCat Voice Pair", true);
     if m.tts_voice_profiles.is_empty() {
         let _ = voice_menu.append(&MenuItem::with_id(
@@ -340,6 +365,21 @@ fn build_menu(m: &MenuModel) -> Menu {
     let _ = translation_menu.append(&target_menu);
     let _ = menu.append(&translation_menu);
 
+    let subtitles_menu = Submenu::new("Live System-Audio Subtitles", true);
+    let _ = subtitles_menu.append(&MenuItem::with_id(
+        ID_SUBTITLES_NATIVE,
+        "CrisperWhisper subtitles",
+        true,
+        None,
+    ));
+    let _ = subtitles_menu.append(&MenuItem::with_id(
+        ID_SUBTITLES_ENGLISH,
+        "Translated English subtitles",
+        true,
+        None,
+    ));
+    let _ = menu.append(&subtitles_menu);
+
     let _ = menu.append(&PredefinedMenuItem::separator());
 
     // ── Actions ────────────────────────────────────────────────────────
@@ -381,6 +421,12 @@ fn map_event(id: &str, model: &MenuModel) -> Option<TrayEvent> {
     if id == ID_LONGCAT_SEED_INCREMENT {
         return Some(TrayEvent::AdjustLongCatSeed(1));
     }
+    if id == ID_SUBTITLES_NATIVE {
+        return Some(TrayEvent::StartSubtitles(false));
+    }
+    if id == ID_SUBTITLES_ENGLISH {
+        return Some(TrayEvent::StartSubtitles(true));
+    }
     if let Some(name) = id.strip_prefix("asr:") {
         if model.asr_engines.iter().any(|e| e == name) {
             return Some(TrayEvent::SetEngine(name.to_string()));
@@ -399,6 +445,11 @@ fn map_event(id: &str, model: &MenuModel) -> Option<TrayEvent> {
     if let Some(mode) = id.strip_prefix("ttsinput:") {
         if mode == "selection" || mode == "clipboard" {
             return Some(TrayEvent::SetTtsInputMode(mode.to_string()));
+        }
+    }
+    if let Some(mode) = id.strip_prefix("ttsoutput:") {
+        if matches!(mode, "playback" | "clipboard_wav" | "mic_forwarder") {
+            return Some(TrayEvent::SetTtsOutput(mode.to_string()));
         }
     }
     if let Some(name) = id.strip_prefix("ttsvoice:") {

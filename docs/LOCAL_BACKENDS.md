@@ -137,7 +137,8 @@ guidance_strength = 4.0
 guidance_method = "apg"
 seed = 1024
 duration_scale = 1.0
-max_chunk_seconds = 20.0
+concatenate_chunks = true
+words_per_chunk = 35
 
 [[tts.longcat.voice_profiles]]
 name = "Ana"
@@ -166,11 +167,95 @@ available to the next synthesis without restarting Vox. The old
 `prompt_audio_path` + inline `prompt_text` fields remain a fallback only when
 no named profiles exist.
 
-Long text is split on sentence boundaries. Oversized sentences fall back to
-word boundaries and CJK text falls back to character boundaries. Vox ports
-LongCat's own duration estimate and adds a reference-conditioning margin, so
-no request is budgeted above twenty seconds. Multiple PCM WAV responses are
-decoded and rebuilt into one valid WAV before native playback.
+When `concatenate_chunks` is enabled, Vox makes requests of at most
+`words_per_chunk` word-like units and rebuilds every returned PCM WAV into one
+valid result in order. CJK characters count as individual units because those
+languages do not require spaces. When the switch is disabled, the complete
+text is sent as one LongCat request. This replaces the former spoken-duration
+guess with an explicit, user-controlled boundary.
+
+## Synthesized-audio destinations
+
+All TTS-producing flows—text, translated text, speech-to-TTS, and translated
+speech-to-TTS—share one output selection:
+
+```toml
+[tts.output]
+# playback | clipboard_wav | mic_forwarder
+mode = "playback"
+mic_forwarder_url = "http://127.0.0.1:8182"
+```
+
+- `playback` preserves the original speaker behavior.
+- `clipboard_wav` writes `vox-output.wav` beside `vox.exe` and publishes it
+  to the Windows clipboard as a pasteable file (`CF_HDROP`), not path text.
+- `mic_forwarder` posts a normalized WAV to the native router.
+
+## Native microphone router
+
+The router is an opt-in Cargo target; the normal release command still builds
+only `vox.exe`:
+
+```powershell
+cargo build --release --features mic-forwarder --bin vox-mic-forwarder
+.\target\release\vox-mic-forwarder.exe --list-devices
+.\target\release\vox-mic-forwarder.exe --init-config
+```
+
+`mic-forwarder.toml` is created beside the router executable. Configure an
+exact device name (or a unique fragment):
+
+```toml
+bind = "127.0.0.1:8182"
+output_device = "CABLE Input"
+system_audio_enabled = true
+system_audio_device = "default"
+system_audio_sample_rate = 16000
+injected_gain = 1.0
+queue_seconds = 300
+
+[[inputs]]
+name = "default"
+gain = 1.0
+
+[[inputs]]
+name = "Second microphone name"
+gain = 1.0
+```
+
+The router captures both inputs continuously, mixes them with WAVs posted to
+`POST /v1/forward`, and renders the result to `output_device`. For a virtual
+microphone, this must be the playback side of an installed virtual cable;
+choose that cable's capture side as the Windows/application microphone. The
+physical mic remains an ordinary, live input to the mix.
+
+The independent WASAPI loopback tap captures `system_audio_device` for
+captions and never enters the routed microphone mix. Health and device data
+are available at `/health` and `/v1/devices`.
+
+## Live system-audio subtitles
+
+Start `vox-mic-forwarder`, CrisperWhisper, and optionally the local translator.
+Then use the tray's **Live System-Audio Subtitles** submenu:
+
+- **CrisperWhisper subtitles**: system speaker → intended/literal transcript.
+- **Translated English subtitles**: system speaker → transcript → local
+  translator → final English line.
+
+The native borderless overlay is movable, always on top, and closes with
+Escape. Its rolling-window settings live in executable-local `config.toml`:
+
+```toml
+[subtitles]
+router_url = "http://127.0.0.1:8182"
+chunk_seconds = 3.0
+font_size = 30.0
+max_lines = 3
+```
+
+The router, CrisperWhisper model, and translator all remain warm between
+windows. The translation parser intentionally keeps only the final meaningful
+model-output line, discarding headings such as “here is your translation.”
 
 ## Local translation
 

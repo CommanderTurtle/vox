@@ -74,6 +74,20 @@ copy_only = false
 primary_engine = "edge-tts"
 input_mode = "selection"
 
+[tts.output]
+# playback | clipboard_wav | mic_forwarder
+mode = "playback"
+mic_forwarder_url = "http://127.0.0.1:8182"
+
+[subtitles]
+# Native system-audio loopback is supplied by vox-mic-forwarder. The regular
+# subtitle lane uses CrisperWhisper directly; the English lane additionally
+# uses the configured local translator.
+router_url = "http://127.0.0.1:8182"
+chunk_seconds = 3.0
+font_size = 30.0
+max_lines = 3
+
 [tts.edge]
 voice = "zh-CN-XiaoxiaoNeural"
 rate = "+0%"
@@ -110,7 +124,11 @@ guidance_strength = 4.0
 guidance_method = "apg"
 seed = 1024
 duration_scale = 1.0
-max_chunk_seconds = 20.0
+# When enabled, split by this many word-like units and concatenate the
+# returned WAVs. CJK characters count as individual units. When disabled,
+# the full text is sent in one request.
+concatenate_chunks = true
+words_per_chunk = 35
 
 [translate]
 # Standalone local translator (or another explicitly selected local

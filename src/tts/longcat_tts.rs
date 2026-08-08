@@ -1,9 +1,8 @@
 //! LongCat local voice-cloning adapter.
 //!
-//! Text is split before it reaches the service. Every request represents at
-//! most twenty estimated seconds (and normally less when reference-audio
-//! conditioning can stretch delivery). Returned PCM WAV files are decoded
-//! and reassembled as one valid WAV container for Vox playback.
+//! Long synthesis can be split by an explicit word-unit budget before it
+//! reaches the service. Returned PCM WAV files are decoded and reassembled
+//! as one valid WAV container for whichever Vox output is selected.
 
 use std::io::Cursor;
 use std::path::PathBuf;
@@ -165,16 +164,26 @@ impl TtsEngine for LongCatTtsEngine {
     }
 
     async fn synthesize(&self, text: &str) -> Result<Vec<u8>, TtsError> {
-        let limit = safe_chunk_limit(&self.config);
-        let chunks = split_for_duration(text, limit);
+        let chunks = if self.config.concatenate_chunks {
+            split_by_word_units(text, self.config.words_per_chunk.max(1))
+        } else {
+            let text = text.trim();
+            (!text.is_empty())
+                .then(|| vec![text.to_string()])
+                .unwrap_or_default()
+        };
         if chunks.is_empty() {
             return Err(Self::error("text is empty"));
         }
-        log::info!(
-            "LongCat synthesis: {} chunk(s), {:.1}s estimated ceiling per request",
-            chunks.len(),
-            limit
-        );
+        if self.config.concatenate_chunks {
+            log::info!(
+                "LongCat synthesis: {} word-bounded chunk(s), {} units maximum per request",
+                chunks.len(),
+                self.config.words_per_chunk.max(1)
+            );
+        } else {
+            log::info!("LongCat synthesis: one unsplit request");
+        }
         let mut audio = Vec::with_capacity(chunks.len());
         for (index, chunk) in chunks.iter().enumerate() {
             log::info!(
@@ -189,79 +198,48 @@ impl TtsEngine for LongCatTtsEngine {
     }
 }
 
-/// LongCat can stretch cloned speech relative to its transcript. Reserving a
-/// 1.5x conditioning margin keeps each generated request under the user's
-/// hard twenty-second accuracy boundary without changing the server.
-fn safe_chunk_limit(config: &LongCatTtsConfig) -> f32 {
-    let requested = config.max_chunk_seconds.clamp(1.0, 20.0);
-    let duration_scale = config.duration_scale.max(1.0);
-    let has_voice = config.active_voice().is_some() || !config.prompt_audio_path.trim().is_empty();
-    let conditioning_margin = if !has_voice { 1.0 } else { 1.5 };
-    requested / duration_scale / conditioning_margin
-}
-
-fn estimated_seconds(text: &str) -> f32 {
-    let mut chinese = 0usize;
-    let mut latin = 0usize;
-    let mut other = 0usize;
-    for character in text.chars().filter(|character| !character.is_whitespace()) {
-        if ('\u{4e00}'..='\u{9fff}').contains(&character) {
-            chinese += 1;
-        } else if character.is_alphabetic() {
-            latin += 1;
-        } else {
-            other += 1;
+/// Split on explicit word-like units rather than guessing spoken duration.
+/// Space-delimited words are one unit. Each CJK character is one unit so a
+/// sentence without spaces is still bounded and can use the same control.
+fn split_by_word_units(text: &str, maximum: usize) -> Vec<String> {
+    let maximum = maximum.max(1);
+    let mut units: Vec<(String, bool)> = Vec::new();
+    for token in text.split_whitespace() {
+        let mut token_units = Vec::new();
+        let mut segment = String::new();
+        for character in token.chars() {
+            if is_cjk(character) {
+                if !segment.is_empty() {
+                    token_units.push(std::mem::take(&mut segment));
+                }
+                token_units.push(character.to_string());
+            } else {
+                segment.push(character);
+            }
+        }
+        if !segment.is_empty() {
+            token_units.push(segment);
+        }
+        for (index, unit) in token_units.into_iter().enumerate() {
+            units.push((unit, index > 0));
         }
     }
-    if chinese > latin {
-        chinese += other;
-    } else {
-        latin += other;
-    }
-    chinese as f32 * 0.21 + latin as f32 * 0.082
-}
-
-fn split_for_duration(text: &str, maximum: f32) -> Vec<String> {
-    let clean = text.split_whitespace().collect::<Vec<_>>().join(" ");
-    if clean.is_empty() {
+    if units.is_empty() {
         return Vec::new();
     }
-
-    let mut units = Vec::new();
-    for sentence in clean.split_inclusive(|character: char| {
-        matches!(
-            character,
-            '.' | '!' | '?' | ';' | ':' | '\n' | '。' | '！' | '？' | '；'
-        )
-    }) {
-        let sentence = sentence.trim();
-        if sentence.is_empty() {
-            continue;
-        }
-        if estimated_seconds(sentence) <= maximum {
-            units.push(sentence.to_string());
-        } else if sentence.split_whitespace().count() > 1 {
-            units.extend(sentence.split_whitespace().map(str::to_string));
-        } else {
-            units.extend(sentence.chars().map(|character| character.to_string()));
-        }
-    }
-
     let mut chunks = Vec::new();
     let mut current = String::new();
-    for unit in units {
-        let separator = if needs_space_between(&current, &unit) {
-            " "
-        } else {
-            ""
-        };
-        let candidate = format!("{current}{separator}{unit}");
-        if !current.is_empty() && estimated_seconds(&candidate) > maximum {
-            chunks.push(current);
-            current = unit;
-        } else {
-            current = candidate;
+    let mut count = 0usize;
+    for (unit, same_token) in units {
+        if count == maximum {
+            chunks.push(std::mem::take(&mut current));
+            count = 0;
         }
+        if !current.is_empty() && !same_token {
+            current.push(' ');
+        }
+        current.push_str(&unit);
+        count += 1;
     }
     if !current.is_empty() {
         chunks.push(current);
@@ -269,15 +247,14 @@ fn split_for_duration(text: &str, maximum: f32) -> Vec<String> {
     chunks
 }
 
-fn needs_space_between(left: &str, right: &str) -> bool {
-    let Some(last) = left.chars().last() else {
-        return false;
-    };
-    let Some(first) = right.chars().next() else {
-        return false;
-    };
-    let is_cjk = |character: char| ('\u{4e00}'..='\u{9fff}').contains(&character);
-    !is_cjk(last) && !is_cjk(first)
+fn is_cjk(character: char) -> bool {
+    matches!(
+        character,
+        '\u{3400}'..='\u{4dbf}'
+            | '\u{4e00}'..='\u{9fff}'
+            | '\u{3040}'..='\u{30ff}'
+            | '\u{ac00}'..='\u{d7af}'
+    )
 }
 
 fn merge_wav_chunks(chunks: &[Vec<u8>]) -> Result<Vec<u8>, TtsError> {
@@ -339,20 +316,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn chunks_stay_within_requested_estimate() {
-        let text = "This is a deliberately long sentence with enough words to exceed a tiny duration budget, followed by another sentence.";
-        let chunks = split_for_duration(text, 1.2);
-        assert!(chunks.len() > 1);
-        assert!(chunks.iter().all(|chunk| estimated_seconds(chunk) <= 1.2));
-        assert_eq!(chunks.join(" ").replace("  ", " "), text);
+    fn chunks_by_explicit_word_budget() {
+        let text = "This is a deliberate six word sentence.";
+        let chunks = split_by_word_units(text, 3);
+        assert_eq!(chunks, ["This is a", "deliberate six word", "sentence."]);
     }
 
     #[test]
-    fn longcat_never_accepts_more_than_twenty_seconds() {
-        let mut config = LongCatTtsConfig::default();
-        config.max_chunk_seconds = 99.0;
-        assert_eq!(safe_chunk_limit(&config), 20.0);
-        config.prompt_audio_path = "voice.wav".into();
-        assert!(safe_chunk_limit(&config) < 14.0);
+    fn cjk_without_spaces_is_bounded() {
+        let chunks = split_by_word_units("你好世界测试", 2);
+        assert_eq!(chunks, ["你好", "世界", "测试"]);
     }
 }

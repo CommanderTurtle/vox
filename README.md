@@ -31,6 +31,8 @@
 - 🗣️ **Multiple TTS Engines** — **Free Microsoft Edge TTS** (no API key) and cloud Mimo TTS, with voice/rate/volume/pitch configuration
 - 🌐 **Local Translation Routes** — inbound detect/source → English and outbound English → a selected language, available for speech, selected text, injection, and TTS
 - 🎭 **Named LongCat Voices** — save any number of `.wav`/`.mp3`/`.m4a` + verbatim `.txt` pairs and switch them from the tray or a hotkey
+- 🎚️ **Native Mic Router** — mix multiple Windows input devices with generated speech and send the result to a selectable virtual-microphone endpoint
+- 💬 **Local Live Subtitles** — caption native system audio through CrisperWhisper, with an optional local translate-to-English lane
 - 🪶 **Minimal Footprint** — Pure system tray icon, no main window, zero CPU when idle
 - 🌍 **Global Hotkeys** — Fully customizable keybindings for all actions
 - 💻 **Cross-Platform** — Windows, macOS and Linux
@@ -59,6 +61,13 @@ cargo build --release
 ./target/release/vox
 ```
 
+The native Windows microphone router is a separate opt-in binary and is not
+part of an ordinary Vox build:
+
+```bash
+cargo build --release --features mic-forwarder --bin vox-mic-forwarder
+```
+
 ### Quick start
 
 ```bash
@@ -80,7 +89,7 @@ cargo run --release
 ### Local CrisperWhisper + LongCat pipeline
 
 This fork can use CrisperWhisper 2.0 in intended/non-literal or literal mode, LongCat
-voice cloning with safe sub-20-second request chunks, and a dedicated local
+voice cloning with configurable word-bounded concatenated requests, and a dedicated local
 translation service that reproduces the proven local Qwen text-generation
 path without running ComfyUI. Windows can run the native Vox tray client while
 the model services remain inside WSL or on another private-LAN host.
@@ -152,9 +161,11 @@ Record Mode  ▸  Push-to-Talk (hold) / Toggle (press)                    (✓ a
 ─────────────
 TTS Engine   ▸  edge-tts / mimo-tts                                      (✓ active)
 TTS Input    ▸  Selection (Ctrl+C) / Clipboard                           (✓ active)
+TTS Output   ▸  Speakers / Clipboard WAV file / Microphone router         (✓ active)
 LongCat Voice Pair ▸ each saved .wav/.mp3/.m4a + verbatim .txt pair       (✓ active)
 LongCat Seed (1024) ▸ − 1 / + 1
 Local Translation ▸ Enable / Inbound / Outbound / target language         (✓ active)
+Live System-Audio Subtitles ▸ CrisperWhisper / Translated English
 ─────────────
 Toggle Recording
 Settings…
@@ -441,13 +452,8 @@ Quit
 
 ## 配置
 
-配置文件位置：
-
-| 平台    | 路径                                                      |
-| ------- | --------------------------------------------------------- |
-| Windows | `%APPDATA%\vox\vox\config\config.toml`                  |
-| macOS   | `~/Library/Application Support/com.vox/vox/config.toml` |
-| Linux   | `~/.config/vox/config.toml`                             |
+配置是可移植的：所有平台上的 `config.toml` 都位于正在运行的 Vox
+可执行文件旁边；如果不存在，Vox 会在该位置创建默认文件。
 
 ```toml
 [hotkey]
