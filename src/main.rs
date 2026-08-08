@@ -8,6 +8,7 @@ mod audio;
 mod config;
 mod inject;
 mod settings;
+mod translation;
 mod tray;
 mod tts;
 
@@ -23,6 +24,7 @@ use audio::capture::AudioCapture;
 use audio::utils::{pcm_to_wav, resample_linear};
 use config::ConfigManager;
 use inject::{inject_text, InjectMode};
+use translation::Translator;
 use tray::{refresh_menu, spawn_tray, MenuModel, TrayCommand, TrayEvent};
 use tts::mimo_tts::MimoTtsEngine;
 use tts::TtsInputMode;
@@ -31,9 +33,21 @@ use tts::TtsManager;
 /// Result of an async ASR job, posted back to the main loop.
 enum AsrResult {
     /// Successfully transcribed text, ready to inject.
-    Text(String),
+    Text {
+        text: String,
+        destination: RecordingDestination,
+    },
     /// ASR failed; message is logged and the app returns to idle.
     Failed(String),
+    /// Async translate/TTS action completed without text injection.
+    Completed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RecordingDestination {
+    Inject,
+    Speak,
+    TranslateAndSpeak,
 }
 
 /// Shared application state.
@@ -41,6 +55,7 @@ struct AppCtx {
     config_mgr: ConfigManager,
     asr_mgr: Arc<AsrManager>,
     tts_mgr: Arc<TtsManager>,
+    translator: Arc<Translator>,
     tts_input_mode: tts::TtsInputMode,
     inject_mode: InjectMode,
     /// How the record hotkey behaves (push-to-talk vs toggle).
@@ -49,6 +64,7 @@ struct AppCtx {
     tray_cmd_tx: channel::Sender<TrayCommand>,
     /// Current recording capture handle (None when idle).
     capture: Option<AudioCapture>,
+    recording_destination: RecordingDestination,
     /// Shared async runtime for ASR/TTS (kept alive for the app lifetime).
     runtime: tokio::runtime::Runtime,
     /// Sender for ASR results posted from background tasks.
@@ -78,6 +94,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "tts" => {
                 return cmd_tts(&args[2..]);
             }
+            "translate" => {
+                return cmd_translate(&args[2..]);
+            }
             _ => {}
         }
     }
@@ -97,7 +116,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // ── Parse hotkey bindings ────────────────────────────────────────────
-    let (record_binding, engine_switch_binding, inject_switch_binding, tts_binding) = {
+    let (
+        record_binding,
+        engine_switch_binding,
+        inject_switch_binding,
+        tts_binding,
+        tts_voice_binding,
+        translate_text_binding,
+        translate_tts_binding,
+        record_translate_tts_binding,
+        record_tts_binding,
+        translate_route_binding,
+    ) = {
         let cfg = config_mgr.read();
         let record = HotkeyBinding::parse(&cfg.hotkey.record_toggle)
             .expect("Invalid record_toggle hotkey config");
@@ -111,7 +141,30 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             &cfg.hotkey.tts_trigger
         };
         let tts = HotkeyBinding::parse(tts_str).expect("Invalid tts_trigger hotkey config");
-        (record, engine, inject, tts)
+        let voice = HotkeyBinding::parse(&cfg.hotkey.tts_voice_switch)
+            .expect("Invalid tts_voice_switch hotkey config");
+        let translate_text = HotkeyBinding::parse(&cfg.hotkey.translate_text)
+            .expect("Invalid translate_text hotkey config");
+        let translate_tts = HotkeyBinding::parse(&cfg.hotkey.translate_tts)
+            .expect("Invalid translate_tts hotkey config");
+        let record_translate_tts = HotkeyBinding::parse(&cfg.hotkey.record_translate_tts)
+            .expect("Invalid record_translate_tts hotkey config");
+        let record_tts =
+            HotkeyBinding::parse(&cfg.hotkey.record_tts).expect("Invalid record_tts hotkey config");
+        let translate_route = HotkeyBinding::parse(&cfg.hotkey.translate_route_switch)
+            .expect("Invalid translate_route_switch hotkey config");
+        (
+            record,
+            engine,
+            inject,
+            tts,
+            voice,
+            translate_text,
+            translate_tts,
+            record_translate_tts,
+            record_tts,
+            translate_route,
+        )
     };
 
     // ── Initialize ASR manager ───────────────────────────────────────────
@@ -119,6 +172,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // ── Initialize TTS manager ───────────────────────────────────────────
     let tts_mgr: Arc<TtsManager> = Arc::new(build_tts_manager(&config_mgr));
+    let translator = Arc::new(Translator::new(&config_mgr.read().translate));
 
     let inject_mode = InjectMode::from_config(&config_mgr.read());
     let tts_input_mode = TtsInputMode::from_config(&config_mgr.read());
@@ -127,6 +181,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // ── Build system tray (dedicated thread with message pump) ───────────
     let (tray_event_sender, tray_event_receiver) = channel::unbounded::<TrayEvent>();
 
+    let (tts_voice_profiles, tts_voice_active) = longcat_voice_menu(&config_mgr);
+    let (translate_enabled, translate_route, translate_target) = translation_menu(&config_mgr);
+    let crisper_mode = config_mgr.read().asr.crisper.mode.clone();
     let initial_model = MenuModel {
         asr_engines: asr_mgr.engine_names(),
         asr_active: asr_mgr.active_engine(),
@@ -134,6 +191,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         tts_engines: tts_mgr.engine_names(),
         tts_active: tts_mgr.active_engine(),
         tts_input_mode: tts_input_mode.as_str().to_string(),
+        tts_voice_profiles,
+        tts_voice_active,
+        translate_enabled,
+        translate_route,
+        translate_target,
+        crisper_mode,
         record_mode: record_mode.as_str().to_string(),
         app_state: AppState::Idle,
     };
@@ -148,6 +211,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         engine_switch_binding,
         inject_switch_binding,
         tts_binding,
+        tts_voice_binding,
+        translate_text_binding,
+        translate_tts_binding,
+        record_translate_tts_binding,
+        record_tts_binding,
+        translate_route_binding,
         hotkey_sender.clone(),
         stop_flag.clone(),
     );
@@ -169,11 +238,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         config_mgr,
         asr_mgr,
         tts_mgr,
+        translator,
         tts_input_mode,
         inject_mode,
         record_mode,
         tray_cmd_tx,
         capture: None,
+        recording_destination: RecordingDestination::Inject,
         runtime,
         asr_result_tx,
         settings_save_tx,
@@ -214,6 +285,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 /// Build a snapshot of the tray menu model from the live context.
 fn build_menu_model(ctx: &AppCtx, app_state: AppState) -> MenuModel {
+    let (tts_voice_profiles, tts_voice_active) = longcat_voice_menu(&ctx.config_mgr);
+    let (translate_enabled, translate_route, translate_target) = translation_menu(&ctx.config_mgr);
+    let crisper_mode = ctx.config_mgr.read().asr.crisper.mode.clone();
     MenuModel {
         asr_engines: ctx.asr_mgr.engine_names(),
         asr_active: ctx.asr_mgr.active_engine(),
@@ -221,6 +295,12 @@ fn build_menu_model(ctx: &AppCtx, app_state: AppState) -> MenuModel {
         tts_engines: ctx.tts_mgr.engine_names(),
         tts_active: ctx.tts_mgr.active_engine(),
         tts_input_mode: ctx.tts_input_mode.as_str().to_string(),
+        tts_voice_profiles,
+        tts_voice_active,
+        translate_enabled,
+        translate_route,
+        translate_target,
+        crisper_mode,
         record_mode: ctx.record_mode.as_str().to_string(),
         app_state,
     }
@@ -292,6 +372,54 @@ fn handle_tray_event(
             let _ = ctx.config_mgr.save();
             push_tray(ctx, AppState::Idle);
         }
+        Ok(TrayEvent::SetTtsVoiceProfile(name)) => {
+            log::info!("Switching LongCat voice profile to: {}", name);
+            {
+                let mut cfg = ctx.config_mgr.write();
+                if cfg
+                    .tts
+                    .longcat
+                    .voice_profiles
+                    .iter()
+                    .any(|profile| profile.name == name)
+                {
+                    cfg.tts.longcat.active_voice_profile = name;
+                }
+            }
+            let _ = ctx.config_mgr.save();
+            rebuild_tts_manager(ctx);
+            push_tray(ctx, AppState::Idle);
+        }
+        Ok(TrayEvent::SetTranslateRoute(route)) => {
+            log::info!("Switching translation route to: {}", route);
+            {
+                let mut cfg = ctx.config_mgr.write();
+                cfg.translate.active_route = route;
+            }
+            let _ = ctx.config_mgr.save();
+            ctx.translator = Arc::new(Translator::new(&ctx.config_mgr.read().translate));
+            push_tray(ctx, AppState::Idle);
+        }
+        Ok(TrayEvent::SetTranslateTarget(language)) => {
+            log::info!("Switching outbound translation target to: {}", language);
+            {
+                let mut cfg = ctx.config_mgr.write();
+                cfg.translate.outbound.target_language = language;
+            }
+            let _ = ctx.config_mgr.save();
+            ctx.translator = Arc::new(Translator::new(&ctx.config_mgr.read().translate));
+            push_tray(ctx, AppState::Idle);
+        }
+        Ok(TrayEvent::SetCrisperMode(mode)) => {
+            log::info!("Switching Crisper transcript mode to: {}", mode);
+            {
+                let mut cfg = ctx.config_mgr.write();
+                cfg.asr.crisper.mode = mode;
+            }
+            let _ = ctx.config_mgr.save();
+            ctx.asr_mgr = Arc::new(build_asr_manager(&ctx.config_mgr));
+            push_tray(ctx, AppState::Idle);
+        }
         Ok(TrayEvent::SetRecordMode(mode)) => {
             log::info!("Switching record mode to: {}", mode);
             ctx.record_mode = RecordMode::from_str(&mode);
@@ -354,6 +482,80 @@ fn handle_hotkey_event(ctx: &mut AppCtx, event: HotkeyEvent) {
             log::info!("[Hotkey] TTS trigger");
             trigger_tts(ctx);
         }
+        HotkeyEvent::TtsVoiceSwitch => {
+            let switched = {
+                let mut cfg = ctx.config_mgr.write();
+                cfg.tts.longcat.cycle_voice_profile()
+            };
+            if let Some(name) = switched {
+                log::info!("[Hotkey] Switched LongCat voice profile to: {}", name);
+                let _ = ctx.config_mgr.save();
+                rebuild_tts_manager(ctx);
+                push_tray(ctx, AppState::Idle);
+            } else {
+                log::warn!("[Hotkey] No named LongCat voice profiles configured");
+            }
+        }
+        HotkeyEvent::TranslateText => {
+            log::info!("[Hotkey] Translate selected text");
+            trigger_translate(ctx, false);
+        }
+        HotkeyEvent::TranslateTts => {
+            log::info!("[Hotkey] Translate selected text and speak");
+            trigger_translate(ctx, true);
+        }
+        HotkeyEvent::RecordTranslateTtsPressed => {
+            log::info!("[Hotkey] Speech → translation → TTS pressed");
+            match ctx.record_mode {
+                RecordMode::PushToTalk => {
+                    start_recording_for(ctx, RecordingDestination::TranslateAndSpeak)
+                }
+                RecordMode::Toggle => {
+                    if ctx.capture.is_some() {
+                        stop_recording(ctx);
+                    } else {
+                        start_recording_for(ctx, RecordingDestination::TranslateAndSpeak);
+                    }
+                }
+            }
+        }
+        HotkeyEvent::RecordTranslateTtsReleased => {
+            if ctx.record_mode == RecordMode::PushToTalk
+                && ctx.recording_destination == RecordingDestination::TranslateAndSpeak
+            {
+                stop_recording(ctx);
+            }
+        }
+        HotkeyEvent::RecordTtsPressed => {
+            log::info!("[Hotkey] Speech → raw TTS pressed");
+            match ctx.record_mode {
+                RecordMode::PushToTalk => start_recording_for(ctx, RecordingDestination::Speak),
+                RecordMode::Toggle => {
+                    if ctx.capture.is_some() {
+                        stop_recording(ctx);
+                    } else {
+                        start_recording_for(ctx, RecordingDestination::Speak);
+                    }
+                }
+            }
+        }
+        HotkeyEvent::RecordTtsReleased => {
+            if ctx.record_mode == RecordMode::PushToTalk
+                && ctx.recording_destination == RecordingDestination::Speak
+            {
+                stop_recording(ctx);
+            }
+        }
+        HotkeyEvent::TranslateRouteSwitch => {
+            let route = {
+                let mut cfg = ctx.config_mgr.write();
+                cfg.translate.cycle_route()
+            };
+            let _ = ctx.config_mgr.save();
+            ctx.translator = Arc::new(Translator::new(&ctx.config_mgr.read().translate));
+            log::info!("[Hotkey] Translation route: {}", route);
+            push_tray(ctx, AppState::Idle);
+        }
     }
 }
 
@@ -363,11 +565,15 @@ fn handle_hotkey_event(ctx: &mut AppCtx, event: HotkeyEvent) {
 /// clipboard, which must run on the main thread), but synthesis + playback
 /// are dispatched to the shared runtime so the event loop is not blocked.
 fn trigger_tts(ctx: &mut AppCtx) {
-    let mode = ctx.tts_input_mode;
-    log::info!("TTS input mode: {:?}", mode);
+    let Some(text) = read_tts_text(ctx.tts_input_mode) else {
+        return;
+    };
+    speak_text(ctx, text, ctx.translator.translates_tts());
+}
 
-    // Get text according to selected mode
-    let text = match mode {
+fn read_tts_text(mode: TtsInputMode) -> Option<String> {
+    log::info!("Text input mode: {:?}", mode);
+    match mode {
         TtsInputMode::Selection => match inject::text_reader::read_selected_text() {
             Ok(t) if !t.is_empty() => {
                 log::info!("Got {} chars from selection", t.len());
@@ -375,11 +581,11 @@ fn trigger_tts(ctx: &mut AppCtx) {
             }
             Ok(_) => {
                 log::error!("No text selected. Select text first or switch to Clipboard mode.");
-                return;
+                return None;
             }
             Err(e) => {
                 log::error!("Failed to read selection: {}", e);
-                return;
+                return None;
             }
         },
         TtsInputMode::Clipboard => match inject::text_reader::read_clipboard_text() {
@@ -389,15 +595,18 @@ fn trigger_tts(ctx: &mut AppCtx) {
             }
             Ok(_) => {
                 log::error!("Clipboard is empty.");
-                return;
+                return None;
             }
             Err(e) => {
                 log::error!("Failed to read clipboard: {}", e);
-                return;
+                return None;
             }
         },
-    };
+    }
+    .into()
+}
 
+fn speak_text(ctx: &AppCtx, text: String, translate: bool) {
     log::info!(
         "TTS synthesizing with engine '{}': {} chars",
         ctx.tts_mgr.active_engine(),
@@ -407,9 +616,21 @@ fn trigger_tts(ctx: &mut AppCtx) {
     // Synthesize on the shared runtime; play once ready. The event loop is
     // not blocked — this just spawns a task and returns.
     let tts_mgr_ref = ctx.tts_mgr.clone();
+    let translator = ctx.translator.clone();
     let active = ctx.tts_mgr.active_engine();
     let fmt = ctx.tts_mgr.output_format();
     ctx.runtime.spawn(async move {
+        let text = if translate {
+            match translator.translate(&text).await {
+                Ok(translated) => translated,
+                Err(error) => {
+                    log::warn!("TTS translation failed; speaking original text: {}", error);
+                    text
+                }
+            }
+        } else {
+            text
+        };
         let result = tts_mgr_ref.synthesize(&text).await;
         match result {
             Ok(audio) => {
@@ -418,6 +639,47 @@ fn trigger_tts(ctx: &mut AppCtx) {
             }
             Err(e) => {
                 log::error!("TTS synthesis (engine '{}') failed: {}", active, e);
+            }
+        }
+    });
+}
+
+/// Translate selected/clipboard text with the currently selected route, then
+/// either inject the result or synthesize it with the active TTS voice.
+fn trigger_translate(ctx: &mut AppCtx, speak: bool) {
+    if !ctx.translator.is_enabled() {
+        log::warn!("Translation is disabled; enable it in Vox Settings first");
+        return;
+    }
+    let Some(text) = read_tts_text(ctx.tts_input_mode) else {
+        return;
+    };
+    push_tray(ctx, AppState::Transcribing);
+    let translator = ctx.translator.clone();
+    let result_tx = ctx.asr_result_tx.clone();
+    let tts_mgr = ctx.tts_mgr.clone();
+    let fmt = ctx.tts_mgr.output_format();
+    ctx.runtime.spawn(async move {
+        match translator.translate(&text).await {
+            Ok(translated) if speak => match tts_mgr.synthesize(&translated).await {
+                Ok(audio) => {
+                    tts::playback::play_bytes_async(audio, fmt);
+                    let _ = result_tx.send(AsrResult::Completed);
+                }
+                Err(error) => {
+                    log::error!("Translated TTS failed: {}", error);
+                    let _ = result_tx.send(AsrResult::Completed);
+                }
+            },
+            Ok(translated) => {
+                let _ = result_tx.send(AsrResult::Text {
+                    text: translated,
+                    destination: RecordingDestination::Inject,
+                });
+            }
+            Err(error) => {
+                log::error!("Translation failed: {}", error);
+                let _ = result_tx.send(AsrResult::Completed);
             }
         }
     });
@@ -434,6 +696,10 @@ fn toggle_recording(ctx: &mut AppCtx) {
 
 /// Start recording from the microphone.
 fn start_recording(ctx: &mut AppCtx) {
+    start_recording_for(ctx, RecordingDestination::Inject);
+}
+
+fn start_recording_for(ctx: &mut AppCtx, destination: RecordingDestination) {
     if ctx.capture.is_some() {
         log::warn!("start_recording called while already recording; ignoring");
         return;
@@ -441,6 +707,7 @@ fn start_recording(ctx: &mut AppCtx) {
     log::info!("Starting recording...");
     match AudioCapture::start() {
         Ok(capture) => {
+            ctx.recording_destination = destination;
             push_tray(ctx, AppState::Recording);
             ctx.capture = Some(capture);
             log::info!("Recording started.");
@@ -460,6 +727,7 @@ fn stop_recording(ctx: &mut AppCtx) {
             return;
         }
     };
+    let destination = ctx.recording_destination;
     log::info!("Stopping recording...");
     let device_rate = capture.sample_rate();
     let samples = capture.stop();
@@ -489,13 +757,33 @@ fn stop_recording(ctx: &mut AppCtx) {
         ctx.asr_mgr.active_engine()
     );
     let asr_ref = ctx.asr_mgr.clone();
+    let translator = ctx.translator.clone();
     let asr_result_tx = ctx.asr_result_tx.clone();
     ctx.runtime.spawn(async move {
         let result = asr_ref.transcribe(&wav_bytes).await;
         match result {
             Ok(text) => {
                 log::info!("ASR result: {} chars", text.len());
-                let _ = asr_result_tx.send(AsrResult::Text(text));
+                let must_translate = match destination {
+                    RecordingDestination::Inject => translator.translates_asr(),
+                    RecordingDestination::Speak => false,
+                    RecordingDestination::TranslateAndSpeak => true,
+                };
+                let text = if must_translate {
+                    match translator.translate(&text).await {
+                        Ok(translated) => translated,
+                        Err(error) => {
+                            log::warn!(
+                                "ASR translation failed; injecting original transcript: {}",
+                                error
+                            );
+                            text
+                        }
+                    }
+                } else {
+                    text
+                };
+                let _ = asr_result_tx.send(AsrResult::Text { text, destination });
             }
             Err(e) => {
                 let _ = asr_result_tx.send(AsrResult::Failed(e.to_string()));
@@ -507,20 +795,26 @@ fn stop_recording(ctx: &mut AppCtx) {
 /// Handle an ASR result posted from a background task.
 fn handle_asr_result(ctx: &mut AppCtx, result: AsrResult) {
     match result {
-        AsrResult::Text(text) => {
-            log::info!(
-                "Injecting text ({} chars) via {:?}",
-                text.len(),
-                ctx.inject_mode
-            );
-            if let Err(e) = inject_text(&text, ctx.inject_mode) {
-                log::error!("Text injection failed: {}", e);
+        AsrResult::Text { text, destination } => match destination {
+            RecordingDestination::Inject => {
+                log::info!(
+                    "Injecting text ({} chars) via {:?}",
+                    text.len(),
+                    ctx.inject_mode
+                );
+                if let Err(e) = inject_text(&text, ctx.inject_mode) {
+                    log::error!("Text injection failed: {}", e);
+                }
             }
-        }
+            RecordingDestination::TranslateAndSpeak => speak_text(ctx, text, false),
+            RecordingDestination::Speak => speak_text(ctx, text, false),
+        },
         AsrResult::Failed(msg) => {
             log::error!("ASR failed: {}", msg);
         }
+        AsrResult::Completed => {}
     }
+    ctx.recording_destination = RecordingDestination::Inject;
     push_tray(ctx, AppState::Idle);
 }
 
@@ -539,6 +833,7 @@ fn apply_settings(ctx: &mut AppCtx, new_cfg: config::Config) {
 
     ctx.asr_mgr = Arc::new(build_asr_manager(&ctx.config_mgr));
     ctx.tts_mgr = Arc::new(build_tts_manager(&ctx.config_mgr));
+    ctx.translator = Arc::new(Translator::new(&ctx.config_mgr.read().translate));
     ctx.inject_mode = InjectMode::from_config(&ctx.config_mgr.read());
     ctx.tts_input_mode = TtsInputMode::from_config(&ctx.config_mgr.read());
     ctx.record_mode = RecordMode::from_str(&ctx.config_mgr.read().general.record_mode);
@@ -551,6 +846,36 @@ fn apply_settings(ctx: &mut AppCtx, new_cfg: config::Config) {
         ctx.tts_mgr.active_engine(),
         ctx.tts_input_mode,
     );
+}
+
+fn longcat_voice_menu(config_mgr: &ConfigManager) -> (Vec<String>, String) {
+    let cfg = config_mgr.read();
+    let profiles = cfg
+        .tts
+        .longcat
+        .voice_profiles
+        .iter()
+        .map(|profile| profile.name.clone())
+        .collect();
+    (profiles, cfg.tts.longcat.active_voice_name())
+}
+
+fn translation_menu(config_mgr: &ConfigManager) -> (bool, String, String) {
+    let cfg = config_mgr.read();
+    (
+        cfg.translate.enabled,
+        cfg.translate.active_route.clone(),
+        cfg.translate.outbound.target_language.clone(),
+    )
+}
+
+/// Rebuild only the TTS adapters after changing a voice profile while
+/// preserving the selected engine.
+fn rebuild_tts_manager(ctx: &mut AppCtx) {
+    let active = ctx.tts_mgr.active_engine();
+    let manager = build_tts_manager(&ctx.config_mgr);
+    let _ = manager.set_active(&active);
+    ctx.tts_mgr = Arc::new(manager);
 }
 
 // ── CLI debug subcommands ─────────────────────────────────────────────
@@ -645,6 +970,20 @@ fn cmd_tts(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+/// `vox translate <text>` — exercise only the configured local translation
+/// endpoint without opening the tray application.
+fn cmd_translate(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+    if args.is_empty() {
+        return Err("Usage: vox translate <text>".into());
+    }
+    let text = args.join(" ");
+    let config_mgr = ConfigManager::load_or_create()?;
+    let translator = Translator::new(&config_mgr.read().translate);
+    let runtime = tokio::runtime::Runtime::new()?;
+    println!("{}", runtime.block_on(translator.translate(&text))?);
+    Ok(())
+}
+
 fn build_asr_manager(config_mgr: &ConfigManager) -> AsrManager {
     use asr::aliyun_asr::AliyunAsrEngine;
     use asr::mimo_asr::MimoAsrEngine;
@@ -661,6 +1000,20 @@ fn build_asr_manager(config_mgr: &ConfigManager) -> AsrManager {
     };
 
     let mut asr_mgr = AsrManager::new(primary_engine, fallback_engines);
+
+    // CrisperWhisper 2.0 local service. This adapter always requests the
+    // intended/non-literal transcript and is safe to target across the LAN.
+    {
+        let cfg = config_mgr.read();
+        log::info!(
+            "Registering CrisperWhisper ASR engine at {} ({} mode)",
+            cfg.asr.crisper.base_url,
+            cfg.asr.crisper.mode
+        );
+        asr_mgr.register(Box::new(asr::crisper_whisper::CrisperWhisperEngine::new(
+            &cfg.asr.crisper,
+        )));
+    }
 
     // whisper.cpp HTTP server — registered unconditionally; it's just an
     // HTTP client. Fails at transcribe time (and triggers fallback) if the
@@ -779,6 +1132,19 @@ fn build_tts_manager(config_mgr: &ConfigManager) -> TtsManager {
         cfg.tts.primary_engine.clone()
     };
     let mut tts_mgr = TtsManager::new(primary);
+
+    // LongCat local voice cloning. Vox owns request chunking; the standalone
+    // server and its WebUI remain unchanged.
+    {
+        let cfg = config_mgr.read();
+        log::info!(
+            "Registering LongCat TTS engine at {}",
+            cfg.tts.longcat.base_url
+        );
+        tts_mgr.register(Box::new(tts::longcat_tts::LongCatTtsEngine::new(
+            &cfg.tts.longcat,
+        )));
+    }
 
     // Edge TTS — free, no API key. Always registered.
     {

@@ -21,6 +21,8 @@ pub struct Config {
     pub inject: InjectConfig,
     #[serde(default)]
     pub tts: TtsConfig,
+    #[serde(default)]
+    pub translate: TranslateConfig,
     pub general: GeneralConfig,
 }
 
@@ -32,6 +34,37 @@ pub struct HotkeyConfig {
     pub inject_mode_switch: String,
     #[serde(default)]
     pub tts_trigger: String,
+    #[serde(default = "default_tts_voice_switch")]
+    pub tts_voice_switch: String,
+    #[serde(default = "default_translate_text")]
+    pub translate_text: String,
+    #[serde(default = "default_translate_tts")]
+    pub translate_tts: String,
+    #[serde(default = "default_record_translate_tts")]
+    pub record_translate_tts: String,
+    #[serde(default = "default_record_tts")]
+    pub record_tts: String,
+    #[serde(default = "default_translate_route_switch")]
+    pub translate_route_switch: String,
+}
+
+fn default_tts_voice_switch() -> String {
+    "Alt+Shift+T".to_string()
+}
+fn default_translate_text() -> String {
+    "Alt+R".to_string()
+}
+fn default_translate_tts() -> String {
+    "Alt+Shift+R".to_string()
+}
+fn default_record_translate_tts() -> String {
+    "Alt+Shift+`".to_string()
+}
+fn default_record_tts() -> String {
+    "Alt+Ctrl+`".to_string()
+}
+fn default_translate_route_switch() -> String {
+    "Alt+Shift+L".to_string()
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -50,6 +83,67 @@ pub struct AsrConfig {
     pub openai: OpenaiConfig,
     #[serde(default)]
     pub doubao: DoubaoConfig,
+    #[serde(default)]
+    pub crisper: CrisperConfig,
+}
+
+/// CrisperWhisper 2.0 local HTTP service with selectable intended/non-literal
+/// or literal transcription.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct CrisperConfig {
+    #[serde(default = "default_crisper_base_url")]
+    pub base_url: String,
+    #[serde(default = "default_crisper_mode")]
+    pub mode: String,
+    #[serde(default = "default_language")]
+    pub language: String,
+    #[serde(default = "default_crisper_chunk_duration")]
+    pub chunk_duration: f32,
+    #[serde(default = "default_crisper_stride")]
+    pub stride: f32,
+    #[serde(default = "default_crisper_context_words")]
+    pub context_words: u32,
+    #[serde(default = "default_crisper_max_new_tokens")]
+    pub max_new_tokens: u32,
+    #[serde(default)]
+    pub hotwords: String,
+}
+
+fn default_crisper_base_url() -> String {
+    "http://127.0.0.1:8172".to_string()
+}
+fn default_crisper_mode() -> String {
+    "intended".to_string()
+}
+fn default_language() -> String {
+    "en".to_string()
+}
+fn default_crisper_chunk_duration() -> f32 {
+    30.0
+}
+fn default_crisper_stride() -> f32 {
+    26.0
+}
+fn default_crisper_context_words() -> u32 {
+    12
+}
+fn default_crisper_max_new_tokens() -> u32 {
+    256
+}
+
+impl Default for CrisperConfig {
+    fn default() -> Self {
+        Self {
+            base_url: default_crisper_base_url(),
+            mode: default_crisper_mode(),
+            language: default_language(),
+            chunk_duration: default_crisper_chunk_duration(),
+            stride: default_crisper_stride(),
+            context_words: default_crisper_context_words(),
+            max_new_tokens: default_crisper_max_new_tokens(),
+            hotwords: String::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -184,6 +278,8 @@ pub struct TtsConfig {
     pub edge: EdgeTtsConfig,
     #[serde(default)]
     pub doubao: DoubaoTtsConfig,
+    #[serde(default)]
+    pub longcat: LongCatTtsConfig,
 }
 
 impl Default for TtsConfig {
@@ -194,6 +290,238 @@ impl Default for TtsConfig {
             mimo: MimoTtsConfig::default(),
             edge: EdgeTtsConfig::default(),
             doubao: DoubaoTtsConfig::default(),
+            longcat: LongCatTtsConfig::default(),
+        }
+    }
+}
+
+/// LongCat local voice-cloning service. Reference audio and its verbatim
+/// transcript stay client-side and are uploaded only to the configured host.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct LongCatTtsConfig {
+    #[serde(default = "default_longcat_base_url")]
+    pub base_url: String,
+    #[serde(default)]
+    pub prompt_audio_path: String,
+    #[serde(default)]
+    pub prompt_text: String,
+    /// Named reference-audio/transcript pairs. When non-empty, the selected
+    /// profile replaces the legacy prompt_audio_path/prompt_text pair above.
+    #[serde(default)]
+    pub voice_profiles: Vec<LongCatVoiceProfile>,
+    #[serde(default)]
+    pub active_voice_profile: String,
+    #[serde(default = "default_longcat_steps")]
+    pub steps: u32,
+    #[serde(default = "default_longcat_guidance_strength")]
+    pub guidance_strength: f32,
+    #[serde(default = "default_longcat_guidance_method")]
+    pub guidance_method: String,
+    #[serde(default = "default_longcat_seed")]
+    pub seed: u64,
+    #[serde(default = "default_longcat_duration_scale")]
+    pub duration_scale: f32,
+    #[serde(default = "default_longcat_max_chunk_seconds")]
+    pub max_chunk_seconds: f32,
+}
+
+/// One reusable LongCat voice-conditioning pair. The transcript is kept as a
+/// separate UTF-8 text file so reference audio and its verbatim words travel
+/// together without copying a large paragraph into config.toml.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct LongCatVoiceProfile {
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub audio_path: String,
+    #[serde(default)]
+    pub transcript_path: String,
+}
+
+impl LongCatTtsConfig {
+    pub fn active_voice(&self) -> Option<&LongCatVoiceProfile> {
+        if self.voice_profiles.is_empty() {
+            return None;
+        }
+        self.voice_profiles
+            .iter()
+            .find(|profile| profile.name == self.active_voice_profile)
+            .or_else(|| self.voice_profiles.first())
+    }
+
+    pub fn active_voice_name(&self) -> String {
+        self.active_voice()
+            .map(|profile| profile.name.clone())
+            .filter(|name| !name.trim().is_empty())
+            .unwrap_or_else(|| "Legacy pair".to_string())
+    }
+
+    pub fn cycle_voice_profile(&mut self) -> Option<String> {
+        if self.voice_profiles.is_empty() {
+            return None;
+        }
+        let current = self
+            .voice_profiles
+            .iter()
+            .position(|profile| profile.name == self.active_voice_profile)
+            .unwrap_or(0);
+        let next = (current + 1) % self.voice_profiles.len();
+        let name = self.voice_profiles[next].name.clone();
+        self.active_voice_profile = name.clone();
+        Some(name)
+    }
+}
+
+fn default_longcat_base_url() -> String {
+    "http://127.0.0.1:8230".to_string()
+}
+fn default_longcat_steps() -> u32 {
+    16
+}
+fn default_longcat_guidance_strength() -> f32 {
+    4.0
+}
+fn default_longcat_guidance_method() -> String {
+    "apg".to_string()
+}
+fn default_longcat_seed() -> u64 {
+    1024
+}
+fn default_longcat_duration_scale() -> f32 {
+    1.0
+}
+fn default_longcat_max_chunk_seconds() -> f32 {
+    20.0
+}
+
+impl Default for LongCatTtsConfig {
+    fn default() -> Self {
+        Self {
+            base_url: default_longcat_base_url(),
+            prompt_audio_path: String::new(),
+            prompt_text: String::new(),
+            voice_profiles: Vec::new(),
+            active_voice_profile: String::new(),
+            steps: default_longcat_steps(),
+            guidance_strength: default_longcat_guidance_strength(),
+            guidance_method: default_longcat_guidance_method(),
+            seed: default_longcat_seed(),
+            duration_scale: default_longcat_duration_scale(),
+            max_chunk_seconds: default_longcat_max_chunk_seconds(),
+        }
+    }
+}
+
+/// Optional translation stage backed by the standalone local service or
+/// another explicitly configured OpenAI-compatible endpoint. It can
+/// independently transform ASR output and TTS input.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct TranslateConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_true")]
+    pub asr: bool,
+    #[serde(default)]
+    pub tts: bool,
+    #[serde(default = "default_translate_base_url")]
+    pub base_url: String,
+    #[serde(default)]
+    pub api_key: String,
+    #[serde(default)]
+    pub model: String,
+    #[serde(default = "default_translate_max_tokens")]
+    pub max_tokens: u32,
+    #[serde(default = "default_source_language")]
+    pub source_language: String,
+    #[serde(default = "default_target_language")]
+    pub target_language: String,
+    #[serde(default = "default_translate_active_route")]
+    pub active_route: String,
+    #[serde(default = "default_inbound_route")]
+    pub inbound: TranslateRouteConfig,
+    #[serde(default = "default_outbound_route")]
+    pub outbound: TranslateRouteConfig,
+    #[serde(default = "default_translate_system_prompt")]
+    pub system_prompt: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct TranslateRouteConfig {
+    #[serde(default = "default_source_language")]
+    pub source_language: String,
+    #[serde(default = "default_target_language")]
+    pub target_language: String,
+}
+
+impl TranslateConfig {
+    pub fn active_route(&self) -> (&str, &TranslateRouteConfig) {
+        if self.active_route.eq_ignore_ascii_case("outbound") {
+            ("outbound", &self.outbound)
+        } else {
+            ("inbound", &self.inbound)
+        }
+    }
+
+    pub fn cycle_route(&mut self) -> String {
+        self.active_route = if self.active_route.eq_ignore_ascii_case("outbound") {
+            "inbound".to_string()
+        } else {
+            "outbound".to_string()
+        };
+        self.active_route.clone()
+    }
+}
+
+fn default_true() -> bool {
+    true
+}
+fn default_translate_base_url() -> String {
+    "http://127.0.0.1:8176/v1".to_string()
+}
+fn default_source_language() -> String {
+    "auto".to_string()
+}
+fn default_target_language() -> String {
+    "English".to_string()
+}
+fn default_translate_max_tokens() -> u32 {
+    256
+}
+fn default_translate_active_route() -> String {
+    "inbound".to_string()
+}
+fn default_inbound_route() -> TranslateRouteConfig {
+    TranslateRouteConfig {
+        source_language: "auto".to_string(),
+        target_language: "English".to_string(),
+    }
+}
+fn default_outbound_route() -> TranslateRouteConfig {
+    TranslateRouteConfig {
+        source_language: "English".to_string(),
+        target_language: "Spanish".to_string(),
+    }
+}
+fn default_translate_system_prompt() -> String {
+    "You are an expert cross-lingual translator. Identify the source language and translate it naturally into the requested target language without losing meaning or nuance. Return only the translation: no labels, commentary, or explanation. Preserve names, numbers, formatting, profanity, and tone.".to_string()
+}
+
+impl Default for TranslateConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            asr: true,
+            tts: false,
+            base_url: default_translate_base_url(),
+            api_key: String::new(),
+            model: String::new(),
+            max_tokens: default_translate_max_tokens(),
+            source_language: default_source_language(),
+            target_language: default_target_language(),
+            active_route: default_translate_active_route(),
+            inbound: default_inbound_route(),
+            outbound: default_outbound_route(),
+            system_prompt: default_translate_system_prompt(),
         }
     }
 }

@@ -29,6 +29,10 @@ pub enum TrayEvent {
     OpenSettings,
     SetTtsEngine(String),
     SetTtsInputMode(String),
+    SetTtsVoiceProfile(String),
+    SetTranslateRoute(String),
+    SetTranslateTarget(String),
+    SetCrisperMode(String),
     /// "ptt" | "toggle"
     SetRecordMode(String),
 }
@@ -55,6 +59,12 @@ pub struct MenuModel {
     pub tts_active: String,
     /// "selection" | "clipboard"
     pub tts_input_mode: String,
+    pub tts_voice_profiles: Vec<String>,
+    pub tts_voice_active: String,
+    pub translate_enabled: bool,
+    pub translate_route: String,
+    pub translate_target: String,
+    pub crisper_mode: String,
     /// "ptt" | "toggle"
     pub record_mode: String,
     pub app_state: AppState,
@@ -68,8 +78,8 @@ impl MenuModel {
             AppState::Transcribing => "Transcribing…",
         };
         format!(
-            "vox — {} | ASR: {} | TTS: {}",
-            state, self.asr_active, self.tts_active
+            "vox — {} | ASR: {} | TTS: {} | Voice: {}",
+            state, self.asr_active, self.tts_active, self.tts_voice_active
         )
     }
 }
@@ -90,6 +100,18 @@ fn tts_id(name: &str) -> String {
 }
 fn ttsinput_id(mode: &str) -> String {
     format!("ttsinput:{}", mode)
+}
+fn ttsvoice_id(name: &str) -> String {
+    format!("ttsvoice:{}", name)
+}
+fn translate_route_id(route: &str) -> String {
+    format!("translate-route:{}", route)
+}
+fn translate_target_id(language: &str) -> String {
+    format!("translate-target:{}", language)
+}
+fn crisper_mode_id(mode: &str) -> String {
+    format!("crisper-mode:{}", mode)
 }
 
 fn recordmode_id(mode: &str) -> String {
@@ -113,6 +135,21 @@ fn build_menu(m: &MenuModel) -> Menu {
         ));
     }
     let _ = menu.append(&asr_menu);
+
+    let crisper_menu = Submenu::new("Crisper Transcript", true);
+    for (mode, label) in [
+        ("intended", "Intended / non-literal"),
+        ("literal", "Literal / verbatim"),
+    ] {
+        let _ = crisper_menu.append(&CheckMenuItem::with_id(
+            crisper_mode_id(mode),
+            label,
+            true,
+            mode == m.crisper_mode,
+            None,
+        ));
+    }
+    let _ = menu.append(&crisper_menu);
 
     // ── Input group: inject mode ───────────────────────────────────────
     let inject_menu = Submenu::new("Inject Mode", true);
@@ -182,6 +219,68 @@ fn build_menu(m: &MenuModel) -> Menu {
     }
     let _ = menu.append(&ttsinput_menu);
 
+    if !m.tts_voice_profiles.is_empty() {
+        let voice_menu = Submenu::new("LongCat Voice", true);
+        for name in &m.tts_voice_profiles {
+            let _ = voice_menu.append(&CheckMenuItem::with_id(
+                ttsvoice_id(name),
+                name.clone(),
+                true,
+                name == &m.tts_voice_active,
+                None,
+            ));
+        }
+        let _ = menu.append(&voice_menu);
+    }
+
+    if m.translate_enabled {
+        let translate_menu = Submenu::new("Translation Route", true);
+        for (route, label) in [
+            ("inbound", "Inbound: detect/source → English"),
+            ("outbound", "Outbound: English → selected language"),
+        ] {
+            let _ = translate_menu.append(&CheckMenuItem::with_id(
+                translate_route_id(route),
+                label,
+                true,
+                route == m.translate_route,
+                None,
+            ));
+        }
+        let _ = menu.append(&translate_menu);
+
+        let target_menu = Submenu::new("Outbound Language", true);
+        for language in [
+            "English",
+            "Spanish",
+            "French",
+            "German",
+            "Italian",
+            "Portuguese",
+            "Chinese",
+            "Japanese",
+            "Korean",
+            "Arabic",
+            "Hindi",
+            "Russian",
+            "Dutch",
+            "Polish",
+            "Turkish",
+            "Vietnamese",
+            "Thai",
+            "Indonesian",
+        ] {
+            let _ = target_menu.append(&CheckMenuItem::with_id(
+                translate_target_id(language),
+                language,
+                true,
+                language.eq_ignore_ascii_case(&m.translate_target),
+                None,
+            ));
+        }
+        let _ = menu.append(&target_menu);
+    }
+
     let _ = menu.append(&PredefinedMenuItem::separator());
 
     // ── Actions ────────────────────────────────────────────────────────
@@ -226,6 +325,28 @@ fn map_event(id: &str, model: &MenuModel) -> Option<TrayEvent> {
     if let Some(mode) = id.strip_prefix("ttsinput:") {
         if mode == "selection" || mode == "clipboard" {
             return Some(TrayEvent::SetTtsInputMode(mode.to_string()));
+        }
+    }
+    if let Some(name) = id.strip_prefix("ttsvoice:") {
+        if model
+            .tts_voice_profiles
+            .iter()
+            .any(|profile| profile == name)
+        {
+            return Some(TrayEvent::SetTtsVoiceProfile(name.to_string()));
+        }
+    }
+    if let Some(route) = id.strip_prefix("translate-route:") {
+        if route == "inbound" || route == "outbound" {
+            return Some(TrayEvent::SetTranslateRoute(route.to_string()));
+        }
+    }
+    if let Some(language) = id.strip_prefix("translate-target:") {
+        return Some(TrayEvent::SetTranslateTarget(language.to_string()));
+    }
+    if let Some(mode) = id.strip_prefix("crisper-mode:") {
+        if mode == "intended" || mode == "literal" {
+            return Some(TrayEvent::SetCrisperMode(mode.to_string()));
         }
     }
     if let Some(mode) = id.strip_prefix("recordmode:") {

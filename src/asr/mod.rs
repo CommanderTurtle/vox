@@ -6,6 +6,7 @@
 //! - Modules: `whisper_local`, `mimo_asr`, `openai_asr`, `aliyun_asr`.
 
 pub mod aliyun_asr;
+pub mod crisper_whisper;
 pub mod doubao_asr;
 pub mod mimo_asr;
 pub mod openai_asr;

@@ -3,6 +3,12 @@ record_toggle = "Alt+`"
 engine_switch = "Alt+Shift+E"
 inject_mode_switch = "Alt+Shift+V"
 tts_trigger = "Alt+T"
+tts_voice_switch = "Alt+Shift+T"
+translate_text = "Alt+R"
+translate_tts = "Alt+Shift+R"
+record_translate_tts = "Alt+Shift+`"
+record_tts = "Alt+Ctrl+`"
+translate_route_switch = "Alt+Shift+L"
 
 [asr]
 # Local ASR is the default (no cloud key needed). Start the whisper.cpp
@@ -43,6 +49,19 @@ model = "whisper-1"
 # doubao-asr registers and becomes the default ASR engine.
 api_key = ""
 
+[asr.crisper]
+# Local CrisperWhisper 2.0 service. Select intended/non-literal or literal
+# transcript mode. From another LAN machine, replace
+# 127.0.0.1 with the WSL host name/IP (for example alien.local).
+base_url = "http://127.0.0.1:8172"
+mode = "intended"
+language = "en"
+chunk_duration = 30.0
+stride = 26.0
+context_words = 12
+max_new_tokens = 256
+hotwords = ""
+
 [inject]
 mode = "keyboard"
 
@@ -69,6 +88,49 @@ speaker = "zh_female_vv_uranus_bigtts"
 speech_rate = 0      # [-50, 100]; 0 = normal, 100 = 2x, -50 = 0.5x
 loudness_rate = 0    # [-50, 100]; 0 = normal
 sample_rate = 24000  # PCM sample rate
+
+[tts.longcat]
+# Local LongCat voice-cloning server. prompt_text must be the verbatim
+# transcript of prompt_audio_path. Vox never modifies the LongCat service.
+base_url = "http://127.0.0.1:8230"
+prompt_audio_path = ""
+prompt_text = ""
+active_voice_profile = ""
+# Add any number of named reference pairs in Settings, or directly as:
+# [[tts.longcat.voice_profiles]]
+# name = "Ana"
+# audio_path = "C:/voices/ana.m4a"
+# transcript_path = "C:/voices/ana.txt"
+steps = 16
+guidance_strength = 4.0
+guidance_method = "apg"
+seed = 1024
+duration_scale = 1.0
+max_chunk_seconds = 20.0
+
+[translate]
+# Standalone local translator (or another explicitly selected local
+# OpenAI-compatible endpoint). Blank model discovers the first /v1/models
+# entry. Translation never calls a cloud fallback.
+enabled = false
+asr = true
+tts = false
+base_url = "http://127.0.0.1:8176/v1"
+api_key = ""
+model = ""
+max_tokens = 256
+source_language = "auto"
+target_language = "English"
+active_route = "inbound"
+system_prompt = "You are an expert cross-lingual translator. Identify the source language and translate it naturally into the requested target language without losing meaning or nuance. Return only the translation: no labels, commentary, or explanation. Preserve names, numbers, formatting, profanity, and tone."
+
+[translate.inbound]
+source_language = "auto"
+target_language = "English"
+
+[translate.outbound]
+source_language = "English"
+target_language = "Spanish"
 
 [general]
 autostart = true

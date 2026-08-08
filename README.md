@@ -29,6 +29,8 @@
 - 🔊 **Text-to-Speech** — Select text and press a hotkey to hear it read aloud; supports selection copy and clipboard modes
 - 🧠 **Multiple ASR Engines** — Local inference (whisper.cpp HTTP server, whisper-rs FFI) and cloud engines (OpenAI-compatible, Mimo, Aliyun) with automatic fallback
 - 🗣️ **Multiple TTS Engines** — **Free Microsoft Edge TTS** (no API key) and cloud Mimo TTS, with voice/rate/volume/pitch configuration
+- 🌐 **Local Translation Routes** — inbound detect/source → English and outbound English → a selected language, available for speech, selected text, injection, and TTS
+- 🎭 **Named LongCat Voices** — save any number of `.wav`/`.mp3`/`.m4a` + verbatim `.txt` pairs and switch them from the tray or a hotkey
 - 🪶 **Minimal Footprint** — Pure system tray icon, no main window, zero CPU when idle
 - 🌍 **Global Hotkeys** — Fully customizable keybindings for all actions
 - 💻 **Cross-Platform** — Windows, macOS and Linux
@@ -75,6 +77,17 @@ cargo run --release
 # Press Alt+T with text selected to hear it read aloud (Edge TTS, no key).
 ```
 
+### Local CrisperWhisper + LongCat pipeline
+
+This fork can use CrisperWhisper 2.0 in intended/non-literal or literal mode, LongCat
+voice cloning with safe sub-20-second request chunks, and a dedicated local
+translation service that reproduces the proven local Qwen text-generation
+path without running ComfyUI. Windows can run the native Vox tray client while
+the model services remain inside WSL or on another private-LAN host.
+
+See **[Local Backends: Windows + WSL](docs/LOCAL_BACKENDS.md)** for the exact
+startup sequence, settings, CLI checks, and service ownership boundaries.
+
 ---
 
 ## Usage
@@ -103,13 +116,20 @@ cargo run --release
 | Switch ASR engine  | <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>E</kbd> | Cycle through available engines                      |
 | Switch inject mode | <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>V</kbd> | Toggle keyboard / clipboard injection                |
 | TTS trigger        | <kbd>Alt</kbd>+<kbd>T</kbd>                  | Read selected text (or clipboard) aloud              |
+| Translate text     | <kbd>Alt</kbd>+<kbd>R</kbd>                  | Translate selection/clipboard, then inject           |
+| Translate + TTS    | <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>R</kbd> | Translate selection/clipboard, then speak            |
+| Raw speech → TTS   | <kbd>Alt</kbd>+<kbd>Ctrl</kbd>+<kbd>`</kbd>  | Transcribe speech and speak it without translation   |
+| Speech translate → TTS | <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>`</kbd> | Transcribe, translate with active route, then speak |
+| Switch voice       | <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>T</kbd> | Cycle named LongCat reference pairs                  |
+| Switch route       | <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>L</kbd> | Toggle inbound/outbound translation                  |
 
 The record hotkey behavior depends on the **Record Mode** (settable in the
 tray menu or Settings):
 - **Push-to-Talk** (default): hold `Alt+`` to record, release to stop & transcribe
 - **Toggle**: press `Alt+`` to start, press again to stop & transcribe
 
-All keybindings are configurable in `config.toml`.
+All keybindings are configurable in `config.toml`; edited chords take effect
+the next time Vox starts.
 
 ---
 
@@ -122,6 +142,9 @@ Record Mode  ▸  Push-to-Talk (hold) / Toggle (press)                    (✓ a
 ─────────────
 TTS Engine   ▸  edge-tts / mimo-tts                                      (✓ active)
 TTS Input    ▸  Selection (Ctrl+C) / Clipboard                           (✓ active)
+LongCat Voice ▸  any saved audio + transcript pair                        (✓ active)
+Translation Route ▸ Inbound / Outbound                                    (✓ active)
+Outbound Language ▸ English / Spanish / French / …                        (✓ active)
 ─────────────
 Toggle Recording
 Settings…
@@ -150,6 +173,12 @@ record_toggle = "Alt+`"
 engine_switch = "Alt+Shift+E"
 inject_mode_switch = "Alt+Shift+V"
 tts_trigger = "Alt+T"
+tts_voice_switch = "Alt+Shift+T"
+translate_text = "Alt+R"
+translate_tts = "Alt+Shift+R"
+record_tts = "Alt+Ctrl+`"
+record_translate_tts = "Alt+Shift+`"
+translate_route_switch = "Alt+Shift+L"
 
 [asr]
 primary_engine = "whisper-cpp"          # local, no key
@@ -267,6 +296,7 @@ cargo build --release
 cargo run -- transcribe <audio.wav>          # test ASR with a file
 cargo run -- inject "<text>" --mode keyboard # test text injection
 cargo run -- tts "<text>" [out.mp3]          # test TTS (writes file + plays)
+cargo run -- translate "<text>"              # test the local translation stage
 ```
 
 ---

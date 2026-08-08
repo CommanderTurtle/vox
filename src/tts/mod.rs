@@ -6,6 +6,7 @@
 
 pub mod doubao_tts;
 pub mod edge_tts;
+pub mod longcat_tts;
 pub mod mimo_tts;
 pub mod playback;
 

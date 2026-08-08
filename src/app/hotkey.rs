@@ -22,6 +22,22 @@ pub enum HotkeyEvent {
     InjectModeSwitch,
     /// TTS trigger hotkey — read selected text and speak it
     TtsTrigger,
+    /// Cycle the active LongCat reference voice profile.
+    TtsVoiceSwitch,
+    /// Translate selected/clipboard text with the active route and inject it.
+    TranslateText,
+    /// Translate selected/clipboard text with the active route and speak it.
+    TranslateTts,
+    /// Begin the speech → ASR → translation → TTS workflow.
+    RecordTranslateTtsPressed,
+    /// End the speech → ASR → translation → TTS workflow.
+    RecordTranslateTtsReleased,
+    /// Begin a raw speech → ASR → TTS workflow without translation.
+    RecordTtsPressed,
+    /// End a raw speech → ASR → TTS workflow without translation.
+    RecordTtsReleased,
+    /// Toggle inbound/outbound translation route.
+    TranslateRouteSwitch,
 }
 
 /// A parsed hotkey binding: combination of modifier keys + a main key.
@@ -94,6 +110,33 @@ impl HotkeyBinding {
                 }
             }
         }
+        // A binding is an exact chord. Without this, Alt+Shift+T also fires
+        // Alt+T, which makes the distinct translation and voice workflows
+        // impossible to bind safely.
+        let modifier_state = [
+            (
+                self.modifiers.contains(&Key::Alt),
+                pressed.contains(&Key::Alt) || pressed.contains(&Key::AltGr),
+            ),
+            (
+                self.modifiers.contains(&Key::ControlLeft),
+                pressed.contains(&Key::ControlLeft) || pressed.contains(&Key::ControlRight),
+            ),
+            (
+                self.modifiers.contains(&Key::ShiftLeft),
+                pressed.contains(&Key::ShiftLeft) || pressed.contains(&Key::ShiftRight),
+            ),
+            (
+                self.modifiers.contains(&Key::MetaLeft),
+                pressed.contains(&Key::MetaLeft) || pressed.contains(&Key::MetaRight),
+            ),
+        ];
+        if modifier_state
+            .iter()
+            .any(|(required, active)| required != active)
+        {
+            return false;
+        }
         true
     }
 }
@@ -108,6 +151,12 @@ pub fn start_hotkey_listener(
     engine_switch_binding: HotkeyBinding,
     inject_switch_binding: HotkeyBinding,
     tts_binding: HotkeyBinding,
+    tts_voice_binding: HotkeyBinding,
+    translate_text_binding: HotkeyBinding,
+    translate_tts_binding: HotkeyBinding,
+    record_translate_tts_binding: HotkeyBinding,
+    record_tts_binding: HotkeyBinding,
+    translate_route_binding: HotkeyBinding,
     sender: crossbeam::channel::Sender<HotkeyEvent>,
     stop_flag: Arc<AtomicBool>,
 ) {
@@ -120,6 +169,12 @@ pub fn start_hotkey_listener(
         let mut engine_was_pressed = false;
         let mut inject_was_pressed = false;
         let mut tts_was_pressed = false;
+        let mut tts_voice_was_pressed = false;
+        let mut translate_text_was_pressed = false;
+        let mut translate_tts_was_pressed = false;
+        let mut record_translate_tts_was_pressed = false;
+        let mut record_tts_was_pressed = false;
+        let mut translate_route_was_pressed = false;
 
         // rdev's listen() blocks forever; it processes events in callback.
         if let Err(e) = listen(move |event| {
@@ -154,6 +209,41 @@ pub fn start_hotkey_listener(
                         tts_was_pressed = true;
                         let _ = sender.send(HotkeyEvent::TtsTrigger);
                     }
+
+                    if tts_voice_binding.matches(&pressed, &key) && !tts_voice_was_pressed {
+                        tts_voice_was_pressed = true;
+                        let _ = sender.send(HotkeyEvent::TtsVoiceSwitch);
+                    }
+
+                    if translate_text_binding.matches(&pressed, &key) && !translate_text_was_pressed
+                    {
+                        translate_text_was_pressed = true;
+                        let _ = sender.send(HotkeyEvent::TranslateText);
+                    }
+
+                    if translate_tts_binding.matches(&pressed, &key) && !translate_tts_was_pressed {
+                        translate_tts_was_pressed = true;
+                        let _ = sender.send(HotkeyEvent::TranslateTts);
+                    }
+
+                    if record_translate_tts_binding.matches(&pressed, &key)
+                        && !record_translate_tts_was_pressed
+                    {
+                        record_translate_tts_was_pressed = true;
+                        let _ = sender.send(HotkeyEvent::RecordTranslateTtsPressed);
+                    }
+
+                    if record_tts_binding.matches(&pressed, &key) && !record_tts_was_pressed {
+                        record_tts_was_pressed = true;
+                        let _ = sender.send(HotkeyEvent::RecordTtsPressed);
+                    }
+
+                    if translate_route_binding.matches(&pressed, &key)
+                        && !translate_route_was_pressed
+                    {
+                        translate_route_was_pressed = true;
+                        let _ = sender.send(HotkeyEvent::TranslateRouteSwitch);
+                    }
                 }
                 EventType::KeyRelease(key) => {
                     pressed.remove(&key);
@@ -175,6 +265,30 @@ pub fn start_hotkey_listener(
                     }
                     if key == tts_binding.key {
                         tts_was_pressed = false;
+                    }
+                    if key == tts_voice_binding.key {
+                        tts_voice_was_pressed = false;
+                    }
+                    if key == translate_text_binding.key {
+                        translate_text_was_pressed = false;
+                    }
+                    if key == translate_tts_binding.key {
+                        translate_tts_was_pressed = false;
+                    }
+                    if key == record_translate_tts_binding.key {
+                        if record_translate_tts_was_pressed {
+                            let _ = sender.send(HotkeyEvent::RecordTranslateTtsReleased);
+                        }
+                        record_translate_tts_was_pressed = false;
+                    }
+                    if key == record_tts_binding.key {
+                        if record_tts_was_pressed {
+                            let _ = sender.send(HotkeyEvent::RecordTtsReleased);
+                        }
+                        record_tts_was_pressed = false;
+                    }
+                    if key == translate_route_binding.key {
+                        translate_route_was_pressed = false;
                     }
                 }
                 _ => {}
