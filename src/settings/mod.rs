@@ -8,6 +8,7 @@
 //! a pure view over a plain-data struct.
 
 use eframe::egui;
+use std::sync::OnceLock;
 
 use crate::config::Config;
 
@@ -20,43 +21,66 @@ enum SettingsPage {
     General,
 }
 
-/// Spawn the settings window in a new thread.
+struct SettingsRequest {
+    initial: Config,
+    save_tx: crossbeam::channel::Sender<Config>,
+}
+
+static SETTINGS_REQUESTS: OnceLock<crossbeam::channel::Sender<SettingsRequest>> = OnceLock::new();
+
+/// Open Settings on one long-lived worker thread.
 ///
-/// `initial` is the current config snapshot to edit. `save_tx` receives the
-/// edited snapshot when the user saves, so the backend can persist + apply it.
+/// Eframe keeps Winit's event loop in thread-local storage specifically so a
+/// native window can be closed and recreated. Spawning a brand-new thread for
+/// every opening discarded that storage and caused Windows to reject the
+/// second event loop. The worker remains alive; only the ordinary window is
+/// closed and reopened.
 pub fn spawn_settings_window(initial: Config, save_tx: crossbeam::channel::Sender<Config>) {
-    std::thread::spawn(move || {
-        let mut options = eframe::NativeOptions {
-            viewport: egui::ViewportBuilder::default()
-                .with_inner_size([620.0, 720.0])
-                .with_resizable(true),
-            ..Default::default()
-        };
-
-        // Vox owns its tray/message pump on the process main thread and the
-        // settings window intentionally lives on a worker thread. Winit
-        // rejects that topology on Windows unless the platform's explicit
-        // any-thread event-loop contract is enabled.
-        #[cfg(target_os = "windows")]
-        {
-            options.event_loop_builder = Some(Box::new(|builder| {
-                use winit::platform::windows::EventLoopBuilderExtWindows;
-                builder.with_any_thread(true);
-            }));
-        }
-
-        let app = SettingsApp {
-            config: initial,
-            save_tx,
-            page: SettingsPage::Translation,
-        };
-
-        if let Err(e) =
-            eframe::run_native("vox Settings", options, Box::new(|_cc| Ok(Box::new(app))))
-        {
-            log::error!("Settings window error: {}", e);
-        }
+    let requests = SETTINGS_REQUESTS.get_or_init(|| {
+        let (request_tx, request_rx) = crossbeam::channel::unbounded::<SettingsRequest>();
+        std::thread::spawn(move || {
+            while let Ok(request) = request_rx.recv() {
+                run_settings_window(request);
+            }
+        });
+        request_tx
     });
+
+    if let Err(error) = requests.send(SettingsRequest { initial, save_tx }) {
+        log::error!("Could not open Settings: {}", error);
+    }
+}
+
+fn run_settings_window(request: SettingsRequest) {
+    let mut options = eframe::NativeOptions {
+        viewport: egui::ViewportBuilder::default()
+            .with_inner_size([620.0, 720.0])
+            .with_resizable(true),
+        ..Default::default()
+    };
+
+    // Vox owns its tray/message pump on the process main thread and the
+    // settings window intentionally lives on a worker thread. Winit rejects
+    // the first creation on Windows unless this explicit contract is enabled.
+    #[cfg(target_os = "windows")]
+    {
+        options.event_loop_builder = Some(Box::new(|builder| {
+            use winit::platform::windows::EventLoopBuilderExtWindows;
+            builder.with_any_thread(true);
+        }));
+    }
+
+    let app = SettingsApp {
+        config: request.initial,
+        save_tx: request.save_tx,
+        page: SettingsPage::Translation,
+    };
+
+    if let Err(error) =
+        eframe::run_native("vox Settings", options, Box::new(|_cc| Ok(Box::new(app))))
+    {
+        log::error!("Settings window error: {}", error);
+    }
 }
 
 // ---------------------------------------------------------------------------
