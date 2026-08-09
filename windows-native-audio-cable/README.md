@@ -42,16 +42,24 @@ openssl req -x509 -newkey rsa:3072 -sha256 -days 3650 -nodes \
 openssl pkcs12 -export \
   -out mycert.pfx \
   -inkey mycert.key \
-  -in mycert.crt
+  -in mycert.crt \
+  -CSP "Microsoft Enhanced RSA and AES Cryptographic Provider" \
+  -LMK
+
+openssl x509 \
+  -in mycert.crt \
+  -outform DER \
+  -out mycert.cer
 
 mkdir -p /mnt/c/Users/<you>/Desktop/vox-signing
-cp mycert.crt mycert.pfx /mnt/c/Users/<you>/Desktop/vox-signing/
+cp mycert.cer mycert.pfx /mnt/c/Users/<you>/Desktop/vox-signing/
 ```
 
 The files have distinct roles.
 
 ```text
-mycert.crt: public certificate imported into Cert:\LocalMachine\Root
+mycert.crt: public PEM certificate retained in WSL
+mycert.cer: public DER certificate imported into Cert:\LocalMachine\Root
 mycert.pfx: certificate and private key imported into Cert:\LocalMachine\My
 mycert.key: original private key retained in WSL
 ```
@@ -67,7 +75,7 @@ whoami
 
 cd C:\path\to\vox
 .\windows-native-audio-cable\install.ps1 `
-  -CertificatePath C:\Users\<you>\Desktop\vox-signing\mycert.crt `
+  -CertificatePath C:\Users\<you>\Desktop\vox-signing\mycert.cer `
   -PfxPath C:\Users\<you>\Desktop\vox-signing\mycert.pfx
 ```
 
