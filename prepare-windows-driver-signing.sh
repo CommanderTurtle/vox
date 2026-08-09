@@ -4,12 +4,14 @@ set -euo pipefail
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 component_dir="$repo_root/windows-native-audio-cable"
 keys_dir="$repo_root/keys"
+powershell_exe="/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe"
 
 required=(
   "$keys_dir/vox-native-audio-cable.cer"
   "$keys_dir/vox-native-audio-cable.pfx"
   "$keys_dir/pfx-password.txt"
   "$component_dir/prepare-signing.ps1"
+  "$powershell_exe"
 )
 for file in "${required[@]}"; do
   if [[ ! -f "$file" ]]; then
@@ -22,7 +24,7 @@ to_windows_path() {
   wslpath -w "$1"
 }
 
-powershell.exe \
+"$powershell_exe" \
   -NoLogo \
   -NoProfile \
   -ExecutionPolicy Bypass \
