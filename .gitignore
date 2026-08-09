@@ -19,3 +19,6 @@ Thumbs.db
 .env
 *.local.toml
 /keys/
+/.runtime/
+__pycache__/
+*.pyc

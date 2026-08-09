@@ -279,6 +279,27 @@ impl SettingsApp {
                 &mut self.config.asr.crisper.hotwords,
             ));
         });
+        let detect_language = self
+            .config
+            .asr
+            .crisper
+            .language
+            .eq_ignore_ascii_case("detect");
+        if detect_language {
+            ui.label(
+                egui::RichText::new(
+                    "Optional detect lane selected — language is resolved independently for this utterance only.",
+                )
+                .strong(),
+            );
+        } else {
+            ui.label(
+                egui::RichText::new(
+                    "Fixed-language fast path — one full Crisper pass; the MITM is bypassed completely.",
+                )
+                .small(),
+            );
+        }
         ui.horizontal(|ui| {
             ui.label("Chunk / stride:");
             ui.add(
@@ -293,12 +314,30 @@ impl SettingsApp {
                 egui::DragValue::new(&mut self.config.asr.crisper.max_new_tokens).range(1..=2048),
             );
         });
-        ui.label(
-            egui::RichText::new(
-                "Intended mode cleans spoken disfluencies; literal mode preserves the spoken wording. Detect performs one Whisper language-ID pass, then transcribes once using that language.",
-            )
-            .small(),
-        );
+        if detect_language {
+            ui.group(|ui| {
+                ui.horizontal(|ui| {
+                    ui.label("MITM service:");
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.config.asr.crisper.mitm_url)
+                            .desired_width(260.0),
+                    );
+                    ui.label("Candidate tokens:");
+                    ui.add(
+                        egui::DragValue::new(
+                            &mut self.config.asr.crisper.candidate_max_new_tokens,
+                        )
+                        .range(1..=128),
+                    );
+                });
+                ui.label(
+                    egui::RichText::new(
+                        "All Crisper languages decode in one low-token batch. XLM-R cheaply narrows the prompt, EraX-VL rejects fragments, and a high-confidence acoustic prior resolves obvious cases. If multiple complete rows remain, only those rows are translated for one tiny final comparison. The chosen token is used for one full Crisper pass and is never latched.",
+                    )
+                    .small(),
+                );
+            });
+        }
         ui.add_space(6.0);
 
         // whisper.cpp
@@ -707,8 +746,8 @@ impl SettingsApp {
     }
 
     fn render_translate(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Local Translation");
-        ui.label("One local translator is composed natively with Vox input, injection, and speech. No cloud fallback and no parallel workflow engine.");
+        ui.heading("Private language routes");
+        ui.label("Seven explicit local routes compose CrisperWhisper, the optional EraX-VL/XLM spoken-language MITM, multilingual EraX translation, and LongCat. No cloud fallback.");
         ui.add_space(6.0);
         ui.checkbox(
             &mut self.config.translate.enabled,
@@ -762,12 +801,12 @@ impl SettingsApp {
                 ui.selectable_value(
                     &mut self.config.translate.active_route,
                     "inbound".to_string(),
-                    "Inbound: source/detect → English",
+                    "Inbound: any source → English",
                 );
                 ui.selectable_value(
                     &mut self.config.translate.active_route,
                     "outbound".to_string(),
-                    "Outbound: English → selected language",
+                    "Outbound: any source → selected language",
                 );
             });
         Self::render_language_route(ui, "inbound", "Inbound", &mut self.config.translate.inbound);
@@ -779,60 +818,74 @@ impl SettingsApp {
         );
         ui.add_space(10.0);
 
-        ui.label(egui::RichText::new("Native workflow hotkeys").strong());
+        ui.label(
+            egui::RichText::new("Complete route matrix")
+                .strong()
+                .size(16.0),
+        );
+        ui.label(egui::RichText::new("Sound can be microphone or system audio. A Detect source runs the full multilingual MITM on every chunk; it never latches into a previous language.").small());
         egui::Grid::new("translation_flow_matrix")
             .striped(true)
-            .num_columns(4)
+            .num_columns(5)
             .show(ui, |ui| {
+                ui.strong("Route");
                 ui.strong("Input");
-                ui.strong("Transform");
-                ui.strong("Output");
+                ui.strong("Pipeline");
+                ui.strong("Result");
                 ui.strong("Hotkey");
                 ui.end_row();
-                for (input, transform, output, key) in [
+                for (route, input, transform, output, key) in [
                     (
-                        "Microphone",
-                        "Crisper",
-                        "Text / clipboard",
+                        "1",
+                        "Sound",
+                        "STT",
+                        "Text",
                         self.config.hotkey.record_toggle.as_str(),
                     ),
                     (
-                        "Microphone",
-                        "Crisper → translate",
-                        "Text / clipboard",
+                        "2",
+                        "Sound",
+                        "STT → Translate",
+                        "Text",
                         self.config.hotkey.record_translate_text.as_str(),
                     ),
                     (
-                        "Selected text",
-                        "Translate",
-                        "Text / clipboard",
-                        self.config.hotkey.translate_text.as_str(),
-                    ),
-                    (
-                        "Selected text",
-                        "None",
-                        "LongCat TTS",
-                        self.config.hotkey.tts_trigger.as_str(),
-                    ),
-                    (
-                        "Selected text",
-                        "Translate",
-                        "LongCat TTS",
-                        self.config.hotkey.translate_tts.as_str(),
-                    ),
-                    (
-                        "Microphone",
-                        "Crisper",
-                        "LongCat TTS",
+                        "3",
+                        "Sound",
+                        "STT → TTS",
+                        "Audio",
                         self.config.hotkey.record_tts.as_str(),
                     ),
                     (
-                        "Microphone",
-                        "Crisper → translate",
-                        "LongCat TTS",
+                        "4",
+                        "Sound",
+                        "STT → Translate → TTS",
+                        "Audio",
                         self.config.hotkey.record_translate_tts.as_str(),
                     ),
+                    (
+                        "5",
+                        "Text",
+                        "Translate",
+                        "Text",
+                        self.config.hotkey.translate_text.as_str(),
+                    ),
+                    (
+                        "6",
+                        "Text",
+                        "Translate → TTS",
+                        "Audio",
+                        self.config.hotkey.translate_tts.as_str(),
+                    ),
+                    (
+                        "7",
+                        "Text",
+                        "TTS",
+                        "Audio",
+                        self.config.hotkey.tts_trigger.as_str(),
+                    ),
                 ] {
+                    ui.monospace(route);
                     ui.label(input);
                     ui.label(transform);
                     ui.label(output);
@@ -890,7 +943,7 @@ impl SettingsApp {
 
         ui.label("System prompt:");
         ui.add(egui::TextEdit::multiline(&mut self.config.translate.system_prompt).desired_rows(3));
-        ui.label(egui::RichText::new("The translator is instructed to emit only the translated text. Source text is delimited as data, not instructions.").small());
+        ui.label(egui::RichText::new("EraX detects its own source language and is instructed to emit only the selected target language. The MITM token is used only by CrisperWhisper.").small());
         ui.add_space(12.0);
     }
 
@@ -931,26 +984,11 @@ impl SettingsApp {
         ui.group(|ui| {
             ui.label(egui::RichText::new(label).strong());
 
-            let mut source_mode = if route.source_language.eq_ignore_ascii_case("auto") {
-                0
-            } else {
-                1
-            };
-            ui.horizontal_wrapped(|ui| {
-                ui.label("Source:");
-                ui.radio_value(&mut source_mode, 0, "Detect automatically");
-                ui.radio_value(&mut source_mode, 1, "Selected language");
-                if source_mode == 0 {
-                    route.source_language = "auto".to_string();
-                } else {
-                    if route.source_language.eq_ignore_ascii_case("auto") {
-                        route.source_language = "English".to_string();
-                    }
-                    ui.add(
-                        egui::TextEdit::singleline(&mut route.source_language).desired_width(150.0),
-                    );
-                }
-            });
+            route.source_language = "auto".to_string();
+            ui.label(
+                egui::RichText::new("Source: automatic inside EraX (no source token required)")
+                    .small(),
+            );
 
             let mut target_mode = if route.target_language.eq_ignore_ascii_case("English") {
                 0

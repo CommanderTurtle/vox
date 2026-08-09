@@ -338,6 +338,11 @@ CrisperWhisper model, translator, and LongCat service remain warm between
 windows. Legitimate multiline translations are preserved while narrow model
 presentation wrappers and Markdown fences are discarded.
 
+Choose a fixed `microphone_language` / `system_language` whenever it is known.
+That is the direct, one-pass Crisper path. `detect` is deliberately optional
+and resolves every audio window independently; it never changes either saved
+setting or latches the previous result.
+
 ## Local translation
 
 Translation can independently affect ASR output before cursor injection and
@@ -355,7 +360,7 @@ max_tokens = 512
 source_language = "auto"
 target_language = "English"
 active_route = "inbound"
-system_prompt = "You are an expert cross-lingual translator. Identify the source language and translate it naturally into the requested target language without losing meaning or nuance. Return only the translation: no labels, commentary, or explanation. Preserve names, numbers, formatting, profanity, and tone."
+system_prompt = "Translate faithfully into the requested target language. Return only the translation. Preserve names, numbers, formatting, profanity, and tone."
 
 [translate.inbound]
 source_language = "auto"
@@ -366,17 +371,25 @@ source_language = "English"
 target_language = "Spanish"
 ```
 
-The tray selects the active direction and offers common outbound languages;
+The source fields remain in TOML for compatibility, but the local EraX service
+does not require them. EraX detects its own input language and only needs the
+selected target. The language token produced by the optional audio MITM belongs
+exclusively to the final full Crisper pass.
+
+The tray selects the active target route and offers common outbound languages;
 Settings also permits any free-form language name. Vox exposes the complete
 desktop flow matrix without duplicating its battle-tested capture/playback
 paths:
 
-| Input | Optional stage | Output |
-|---|---|---|
-| Speech (STT) | none or active translation route | injected text |
-| Selected/clipboard text | active translation route | injected text |
-| Speech (STT) | none or active translation route | TTS |
-| Selected/clipboard text | none or active translation route | TTS |
+| Route | Input | Pipeline | Output |
+|---:|---|---|---|
+| 1 | microphone/system sound | Crisper STT | text |
+| 2 | microphone/system sound | Crisper STT → EraX target | text |
+| 3 | microphone/system sound | Crisper STT → LongCat | audio |
+| 4 | microphone/system sound | Crisper STT → EraX target → LongCat | audio |
+| 5 | selected/clipboard text | EraX target | text |
+| 6 | selected/clipboard text | EraX target → LongCat | audio |
+| 7 | selected/clipboard text | LongCat | audio |
 
 Dedicated hotkeys select raw versus translated TTS. The normal record and TTS
 hotkeys keep the existing `translate.asr` and `translate.tts` switches for
@@ -400,10 +413,17 @@ original transcript/text rather than losing the user's input.
 ### Standalone translation runtime
 
 `~/multimedia/translate` loads the local EraX Translator V1.0 Q6_K GGUF with
-llama.cpp. `papluca/xlm-roberta-base-language-detection` runs on CPU only when
-a direct text request uses `source_language=auto`; CrisperWhisper handles
-spoken-language identification before audio transcription. EraX's translation-
-only tuning replaces the former general-purpose Qwen-VL prompt flow.
+llama.cpp, the XLM-R classifier on CPU, and the INT4 EraX-VL runtime on CPU.
+Ordinary translation calls use the tiny dedicated translator first. The VL
+runtime is used by the optional spoken-language MITM and as a narrow fallback
+when the dedicated translator returns an unchanged or wrong-language result.
+
+For `detect` audio only, Crisper produces all supported language rows in one
+low-token decoder batch. XLM-R cheaply narrows that inventory. EraX-VL ranks
+complete, grammatical rows using punctuation/coherence evidence. An acoustic
+prior above 0.90 resolves obvious cases immediately; otherwise only the small
+finalist set is translated and compared. The selected ISO token drives one
+full-quality Crisper pass. None of this runs for a fixed-language route.
 
 The service does not launch ComfyUI, an agent, a diffusion model, or a cloud
 client. It has its own process and GPU lifecycle and consumes none of Agents
@@ -418,6 +438,18 @@ These commands exercise the same adapters without opening the tray UI:
 cargo run -- transcribe .\sample.wav
 cargo run -- translate "buenos días"
 cargo run -- tts "A short line for the configured LongCat voice." .\voice.wav
+```
+
+The model-backed acceptance script exercises all seven compositions and writes
+four inspectable WAVs plus `report.json`:
+
+```bash
+python scripts/route_acceptance.py \
+  --audio /path/to/spoken-language.wav \
+  --expected-language zh \
+  --target English \
+  --reference-audio ~/multimedia/longcat/assets/prompt.wav \
+  --reference-text '小偷却一点也不气馁，继续在抽屉里翻找。'
 ```
 
 ## Current boundary

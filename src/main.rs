@@ -947,10 +947,18 @@ fn stop_recording(ctx: &mut AppCtx) {
     let translator = ctx.translator.clone();
     let asr_result_tx = ctx.asr_result_tx.clone();
     ctx.runtime.spawn(async move {
-        let result = asr_ref.transcribe(&wav_bytes).await;
+        let result = asr_ref.transcribe_tagged(&wav_bytes).await;
         match result {
-            Ok(text) => {
-                log::info!("ASR result: {} chars", text.len());
+            Ok(output) => {
+                let asr::AsrOutput { text, language } = output;
+                log::info!(
+                    "ASR result: {} chars{}",
+                    text.len(),
+                    language
+                        .as_deref()
+                        .map(|value| format!(" ({value})"))
+                        .unwrap_or_default()
+                );
                 let must_translate = match destination {
                     RecordingDestination::Inject => translator.translates_asr(),
                     RecordingDestination::TranslateAndInject => true,
@@ -958,7 +966,10 @@ fn stop_recording(ctx: &mut AppCtx) {
                     RecordingDestination::TranslateAndSpeak => true,
                 };
                 let text = if must_translate {
-                    match translator.translate(&text).await {
+                    match translator
+                        .translate_tagged(&text, language.as_deref())
+                        .await
+                    {
                         Ok(translated) => translated,
                         Err(error) => {
                             log::warn!(

@@ -23,7 +23,9 @@ use tower_http::{
     trace::TraceLayer,
 };
 use vox_local_core::{
-    crisper::{normalized_mode, transcribe as transcribe_crisper, CrisperOptions},
+    crisper::{
+        normalized_mode, transcribe_tagged as transcribe_crisper, CrisperOptions, CrisperTranscript,
+    },
     longcat::{synthesize as synthesize_longcat, LongCatError, LongCatOptions, LongCatReference},
 };
 
@@ -89,6 +91,8 @@ struct CrisperConfig {
     context_words: u32,
     #[serde(default = "default_max_tokens")]
     max_new_tokens: u32,
+    #[serde(default = "default_candidate_max_tokens")]
+    candidate_max_new_tokens: u32,
     #[serde(default)]
     hotwords: String,
 }
@@ -102,6 +106,7 @@ impl Default for CrisperConfig {
             stride: default_stride(),
             context_words: default_context_words(),
             max_new_tokens: default_max_tokens(),
+            candidate_max_new_tokens: default_candidate_max_tokens(),
             hotwords: String::new(),
         }
     }
@@ -239,6 +244,7 @@ struct AudioInput {
 #[derive(Debug, Serialize)]
 struct TranscribeResponse {
     transcript: String,
+    source_language: Option<String>,
     translated_text: Option<String>,
     output_text: String,
     mode: String,
@@ -443,13 +449,16 @@ async fn transcribe(
     authorize(&state, &headers)?;
     let input = parse_audio_input(multipart, &state.config.crisper.default_mode).await?;
     let transcript = transcribe_audio(&state, &input).await?;
+    let source_language = transcript.language.clone();
     let translated = if input.translate {
         Some(
             translate_text(
                 &state,
-                &transcript,
+                &transcript.text,
                 &input.route,
-                input.source_language.as_deref(),
+                source_language
+                    .as_deref()
+                    .or(input.source_language.as_deref()),
                 input.target_language.as_deref(),
             )
             .await?
@@ -458,9 +467,12 @@ async fn transcribe(
     } else {
         None
     };
-    let output = translated.clone().unwrap_or_else(|| transcript.clone());
+    let output = translated
+        .clone()
+        .unwrap_or_else(|| transcript.text.clone());
     Ok(Json(TranscribeResponse {
-        transcript,
+        transcript: transcript.text,
+        source_language,
         translated_text: translated,
         output_text: output,
         mode: normalized_mode(&input.mode).to_string(),
@@ -506,19 +518,22 @@ async fn transcribe_and_speak(
     let output = if input.translate {
         translate_text(
             &state,
-            &transcript,
+            &transcript.text,
             &input.route,
-            input.source_language.as_deref(),
+            transcript
+                .language
+                .as_deref()
+                .or(input.source_language.as_deref()),
             input.target_language.as_deref(),
         )
         .await?
         .0
     } else {
-        transcript.clone()
+        transcript.text.clone()
     };
     let seed = input.seed.unwrap_or(state.config.longcat.seed);
     let wav = synthesize(&state, &output, input.voice.as_deref(), seed).await?;
-    wav_response(wav, Some(&transcript), Some(&output), seed)
+    wav_response(wav, Some(&transcript.text), Some(&output), seed)
 }
 
 async fn hoist(
@@ -553,13 +568,16 @@ async fn system_audio_transcribe(
     authorize(&state, &headers)?;
     let input = take_router_audio(&state, &request).await?;
     let transcript = transcribe_audio(&state, &input).await?;
+    let source_language = transcript.language.clone();
     let translated = if request.translate.unwrap_or(false) {
         Some(
             translate_text(
                 &state,
-                &transcript,
+                &transcript.text,
                 request.route.as_deref().unwrap_or("inbound"),
-                request.source_language.as_deref(),
+                source_language
+                    .as_deref()
+                    .or(request.source_language.as_deref()),
                 request.target_language.as_deref(),
             )
             .await?
@@ -568,9 +586,12 @@ async fn system_audio_transcribe(
     } else {
         None
     };
-    let output = translated.clone().unwrap_or_else(|| transcript.clone());
+    let output = translated
+        .clone()
+        .unwrap_or_else(|| transcript.text.clone());
     Ok(Json(TranscribeResponse {
-        transcript,
+        transcript: transcript.text,
+        source_language,
         translated_text: translated,
         output_text: output,
         mode: normalized_mode(
@@ -595,9 +616,12 @@ async fn system_audio_dub(
         Some(
             translate_text(
                 &state,
-                &transcript,
+                &transcript.text,
                 request.route.as_deref().unwrap_or("inbound"),
-                request.source_language.as_deref(),
+                transcript
+                    .language
+                    .as_deref()
+                    .or(request.source_language.as_deref()),
                 request.target_language.as_deref(),
             )
             .await?
@@ -606,12 +630,14 @@ async fn system_audio_dub(
     } else {
         None
     };
-    let output_text = translated.clone().unwrap_or_else(|| transcript.clone());
+    let output_text = translated
+        .clone()
+        .unwrap_or_else(|| transcript.text.clone());
     let seed = request.seed.unwrap_or(state.config.longcat.seed);
     let wav = synthesize(&state, &output_text, request.voice.as_deref(), seed).await?;
     let destination = request.output.as_deref().unwrap_or("playback");
     match destination {
-        "wav" => wav_response(wav, Some(&transcript), Some(&output_text), seed),
+        "wav" => wav_response(wav, Some(&transcript.text), Some(&output_text), seed),
         "playback" | "mic" => {
             let path = if destination == "mic" {
                 "/v1/forward"
@@ -620,7 +646,7 @@ async fn system_audio_dub(
             };
             post_router_audio(&state, path, &wav, "vox-dub.wav").await?;
             Ok(Json(RoutedAudioResponse {
-                transcript,
+                transcript: transcript.text,
                 translated_text: translated,
                 output_text,
                 output: destination.into(),
@@ -811,9 +837,12 @@ async fn run_system_audio_stream(
         let translated = if request.translate.unwrap_or(false) {
             match translate_text(
                 &state,
-                &transcript,
+                &transcript.text,
                 request.route.as_deref().unwrap_or("inbound"),
-                request.source_language.as_deref(),
+                transcript
+                    .language
+                    .as_deref()
+                    .or(request.source_language.as_deref()),
                 request.target_language.as_deref(),
             )
             .await
@@ -827,11 +856,13 @@ async fn run_system_audio_stream(
         } else {
             None
         };
-        let output = translated.clone().unwrap_or_else(|| transcript.clone());
+        let output = translated
+            .clone()
+            .unwrap_or_else(|| transcript.text.clone());
         if let Ok(mut value) = snapshot.write() {
             value.processing = false;
             value.revision = value.revision.saturating_add(1);
-            value.transcript = transcript;
+            value.transcript = transcript.text;
             value.translated_text = translated;
             value.output_text = output;
             value.last_error = None;
@@ -997,15 +1028,21 @@ async fn parse_audio_input(
     Ok(input)
 }
 
-async fn transcribe_audio(state: &AppState, input: &AudioInput) -> Result<String, ApiError> {
+async fn transcribe_audio(
+    state: &AppState,
+    input: &AudioInput,
+) -> Result<CrisperTranscript, ApiError> {
     let cfg = &state.config.crisper;
     let options = CrisperOptions {
         base_url: state.config.backends.crisper_url.clone(),
+        mitm_url: state.config.backends.translator_url.clone(),
+        mitm_api_key: state.config.backends.translator_api_key.clone(),
         mode: input.mode.clone(),
         language: input
             .language
             .clone()
             .unwrap_or_else(|| cfg.language.clone()),
+        candidate_max_new_tokens: cfg.candidate_max_new_tokens,
         chunk_duration: cfg.chunk_duration,
         stride: cfg.stride,
         context_words: cfg.context_words,
@@ -1395,6 +1432,10 @@ fn default_context_words() -> u32 {
 }
 fn default_max_tokens() -> u32 {
     256
+}
+
+fn default_candidate_max_tokens() -> u32 {
+    24
 }
 fn default_steps() -> u32 {
     16

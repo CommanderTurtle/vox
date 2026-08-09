@@ -57,12 +57,17 @@ api_key = ""
 # transcript mode. From another LAN machine, replace
 # 127.0.0.1 with the WSL host name/IP (for example alien.local).
 base_url = "http://127.0.0.1:8172"
+# Detect is a full MITM route: every Crisper language candidate -> EraX-VL
+# fragment arbitration -> XLM language token -> one full Crisper transcript.
+mitm_url = "http://127.0.0.1:8176"
+mitm_api_key = ""
 mode = "intended"
 language = "detect"
 chunk_duration = 30.0
 stride = 26.0
 context_words = 12
 max_new_tokens = 256
+candidate_max_new_tokens = 24
 hotwords = ""
 
 [inject]
@@ -147,7 +152,7 @@ max_tokens = 512
 source_language = "auto"
 target_language = "English"
 active_route = "inbound"
-system_prompt = "You are an expert cross-lingual translator. Identify the source language and translate it naturally into the requested target language without losing meaning or nuance. Return only the translation: no labels, commentary, or explanation. Preserve names, numbers, formatting, profanity, and tone."
+system_prompt = "Translate faithfully into the requested target language. Return only the translation. Preserve names, numbers, formatting, profanity, and tone."
 
 [translate.inbound]
 source_language = "auto"

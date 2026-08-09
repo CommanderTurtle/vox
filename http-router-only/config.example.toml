@@ -30,6 +30,7 @@ chunk_duration = 30.0
 stride = 26.0
 context_words = 12
 max_new_tokens = 256
+candidate_max_new_tokens = 24
 hotwords = ""
 
 [longcat]

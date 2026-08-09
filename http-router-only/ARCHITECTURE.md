@@ -37,9 +37,10 @@ remains available with `processing=true` until a new revision is complete.
 Translation is not a separate side channel. The same translation primitive is
 composed into `/v1/transcribe`, `/v1/speak`, and
 `/v1/transcribe-and-speak`, while `/v1/translate` exposes it directly. Named
-`inbound`/`outbound` routes supply defaults; every translating request may
-override both `source_language` (`auto` or a selected language) and
-`target_language` (English or any selected language) for that call.
+`inbound`/`outbound` routes supply target defaults. Every translating request
+may override `target_language` for that call. `source_language` remains in the
+wire schema for compatibility, but multilingual EraX does not use it as an
+inference gate; spoken-language tokens belong only to CrisperWhisper.
 
 Desktop Vox and this HTTP member both call `crates/vox-local-core` for CrisperWhisper and LongCat. LongCat uses a configurable character target only to locate a complete sentence boundary: it scans backward first, forward only when necessary, and never splits an unpunctuated sentence. If the backend rejects a multi-sentence request, the core retreats one additional sentence and retries. Successful WAVs are merged into one valid container. Disabling concatenation bypasses all splitting and retry behavior.
 

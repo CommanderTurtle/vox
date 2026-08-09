@@ -15,6 +15,12 @@ pub mod whisper_local;
 
 use async_trait::async_trait;
 
+#[derive(Debug, Clone)]
+pub struct AsrOutput {
+    pub text: String,
+    pub language: Option<String>,
+}
+
 /// Errors from ASR recognition.
 #[derive(Debug, thiserror::Error)]
 pub enum AsrError {
@@ -40,6 +46,15 @@ pub trait AsrEngine: Send + Sync {
 
     /// Transcribe WAV audio bytes to text.
     async fn transcribe(&self, audio_wav: &[u8]) -> Result<String, AsrError>;
+
+    /// Transcribe while preserving an exact source-language token when the
+    /// engine's detection route produced one.
+    async fn transcribe_tagged(&self, audio_wav: &[u8]) -> Result<AsrOutput, AsrError> {
+        self.transcribe(audio_wav).await.map(|text| AsrOutput {
+            text,
+            language: None,
+        })
+    }
 }
 
 /// Manages multiple ASR engines with automatic fallback.
@@ -111,12 +126,19 @@ impl AsrManager {
 
     /// Transcribe audio using the active engine, with automatic fallback.
     pub async fn transcribe(&self, audio_wav: &[u8]) -> Result<String, AsrError> {
+        self.transcribe_tagged(audio_wav)
+            .await
+            .map(|result| result.text)
+    }
+
+    /// Tagged equivalent of `transcribe`, with identical fallback behavior.
+    pub async fn transcribe_tagged(&self, audio_wav: &[u8]) -> Result<AsrOutput, AsrError> {
         let active = self.active.read().expect("active lock poisoned").clone();
         let mut last_error = None;
 
         // Try active engine first
         if let Some((_, engine)) = self.engines.iter().find(|(n, _)| *n == active) {
-            match engine.transcribe(audio_wav).await {
+            match engine.transcribe_tagged(audio_wav).await {
                 Ok(text) => return Ok(text),
                 Err(e) => {
                     log::warn!("Active engine '{}' failed: {}", active, e);
@@ -131,7 +153,7 @@ impl AsrManager {
                 continue; // already tried
             }
             if let Some((_, engine)) = self.engines.iter().find(|(n, _)| n == name) {
-                match engine.transcribe(audio_wav).await {
+                match engine.transcribe_tagged(audio_wav).await {
                     Ok(text) => {
                         log::info!("Fallback engine '{}' succeeded", name);
                         return Ok(text);

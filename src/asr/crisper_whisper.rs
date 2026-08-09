@@ -5,9 +5,9 @@
 //! remains untouched.
 
 use async_trait::async_trait;
-use vox_local_core::crisper::{transcribe, CrisperOptions};
+use vox_local_core::crisper::{transcribe_tagged, CrisperOptions};
 
-use crate::asr::{AsrEngine, AsrError};
+use crate::asr::{AsrEngine, AsrError, AsrOutput};
 use crate::config::CrisperConfig;
 
 pub struct CrisperWhisperEngine {
@@ -42,17 +42,26 @@ impl AsrEngine for CrisperWhisperEngine {
     }
 
     async fn transcribe(&self, audio_wav: &[u8]) -> Result<String, AsrError> {
+        self.transcribe_tagged(audio_wav)
+            .await
+            .map(|result| result.text)
+    }
+
+    async fn transcribe_tagged(&self, audio_wav: &[u8]) -> Result<AsrOutput, AsrError> {
         let options = CrisperOptions {
             base_url: self.config.base_url.clone(),
+            mitm_url: self.config.mitm_url.clone(),
+            mitm_api_key: self.config.mitm_api_key.clone(),
             mode: self.config.mode.clone(),
             language: self.config.language.clone(),
+            candidate_max_new_tokens: self.config.candidate_max_new_tokens,
             chunk_duration: self.config.chunk_duration,
             stride: self.config.stride,
             context_words: self.config.context_words,
             max_new_tokens: self.config.max_new_tokens,
             hotwords: self.config.hotwords.clone(),
         };
-        transcribe(
+        transcribe_tagged(
             &self.client,
             audio_wav,
             "vox-recording.wav",
@@ -60,6 +69,10 @@ impl AsrEngine for CrisperWhisperEngine {
             &options,
         )
         .await
+        .map(|result| AsrOutput {
+            text: result.text,
+            language: result.language,
+        })
         .map_err(|error| Self::error(error.to_string()))
     }
 }

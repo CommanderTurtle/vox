@@ -161,6 +161,10 @@ pub struct AsrConfig {
 pub struct CrisperConfig {
     #[serde(default = "default_crisper_base_url")]
     pub base_url: String,
+    #[serde(default = "default_crisper_mitm_url")]
+    pub mitm_url: String,
+    #[serde(default)]
+    pub mitm_api_key: String,
     #[serde(default = "default_crisper_mode")]
     pub mode: String,
     #[serde(default = "default_detect_language")]
@@ -173,12 +177,17 @@ pub struct CrisperConfig {
     pub context_words: u32,
     #[serde(default = "default_crisper_max_new_tokens")]
     pub max_new_tokens: u32,
+    #[serde(default = "default_crisper_candidate_max_new_tokens")]
+    pub candidate_max_new_tokens: u32,
     #[serde(default)]
     pub hotwords: String,
 }
 
 fn default_crisper_base_url() -> String {
     "http://127.0.0.1:8172".to_string()
+}
+fn default_crisper_mitm_url() -> String {
+    "http://127.0.0.1:8176".to_string()
 }
 fn default_crisper_mode() -> String {
     "intended".to_string()
@@ -195,17 +204,23 @@ fn default_crisper_context_words() -> u32 {
 fn default_crisper_max_new_tokens() -> u32 {
     256
 }
+fn default_crisper_candidate_max_new_tokens() -> u32 {
+    24
+}
 
 impl Default for CrisperConfig {
     fn default() -> Self {
         Self {
             base_url: default_crisper_base_url(),
+            mitm_url: default_crisper_mitm_url(),
+            mitm_api_key: String::new(),
             mode: default_crisper_mode(),
             language: default_detect_language(),
             chunk_duration: default_crisper_chunk_duration(),
             stride: default_crisper_stride(),
             context_words: default_crisper_context_words(),
             max_new_tokens: default_crisper_max_new_tokens(),
+            candidate_max_new_tokens: default_crisper_candidate_max_new_tokens(),
             hotwords: String::new(),
         }
     }
@@ -606,7 +621,7 @@ fn default_outbound_route() -> TranslateRouteConfig {
     }
 }
 fn default_translate_system_prompt() -> String {
-    "You are an expert cross-lingual translator. Identify the source language and translate it naturally into the requested target language without losing meaning or nuance. Return only the translation: no labels, commentary, or explanation. Preserve names, numbers, formatting, profanity, and tone.".to_string()
+    "Translate faithfully into the requested target language. Return only the translation. Preserve names, numbers, formatting, profanity, and tone.".to_string()
 }
 
 impl Default for TranslateConfig {

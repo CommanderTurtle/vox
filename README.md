@@ -125,9 +125,11 @@ cargo run --release
 
 This fork can use CrisperWhisper 2.0 in intended/non-literal or literal mode, LongCat
 voice cloning with configurable sentence-aware concatenated requests, and a dedicated local
-EraX translation service with deterministic XLM-R language detection. Windows can run the native Vox tray client while
+EraX translation service. A known Crisper language is the one-pass fast path; `detect` is an optional per-utterance
+parallel Crisper + XLM-R + EraX-VL arbitration lane. Windows can run the native Vox tray client while
 the model services remain inside WSL or on another private-LAN host.
 
+Start with **[Quick Start](QUICKSTART.md)**.
 See **[Local Backends: Windows + WSL](docs/LOCAL_BACKENDS.md)** for the exact
 startup sequence, settings, CLI checks, and service ownership boundaries.
 

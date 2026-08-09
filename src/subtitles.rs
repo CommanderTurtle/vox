@@ -308,31 +308,30 @@ fn spawn_caption_worker(
                         continue;
                     }
                 };
-                let transcript = match crisper.transcribe(&wav).await {
-                    Ok(text) => text,
+                let transcript = match crisper.transcribe_tagged(&wav).await {
+                    Ok(output) => output,
                     Err(error) => {
                         log::debug!("Subtitle audio produced no transcript: {error}");
                         continue;
                     }
                 };
                 let text = if translate {
-                    let translator_source = if source_language.eq_ignore_ascii_case("detect") {
-                        "auto"
-                    } else {
-                        &source_language
-                    };
+                    let translator_source = transcript
+                        .language
+                        .as_deref()
+                        .unwrap_or(&source_language);
                     match translator
-                        .translate_with(&transcript, translator_source, &target_language)
+                        .translate_with(&transcript.text, translator_source, &target_language)
                         .await
                     {
                         Ok(translated) => translated,
                         Err(error) => {
                             log::warn!("Subtitle translation failed: {error}");
-                            transcript
+                            transcript.text.clone()
                         }
                     }
                 } else {
-                    transcript
+                    transcript.text.clone()
                 };
                 if dub {
                     match longcat.synthesize(&text).await {

@@ -53,7 +53,7 @@ remain deliberately local to this member.
 |---|---|
 | `GET /health` | Read-only aggregate health for the three backends |
 | `GET /v1/routes` | Language defaults, public voice names, default seed, and TTS limits |
-| `POST /v1/translate` | Translate text using a named route or explicit source/target |
+| `POST /v1/translate` | Translate text using a named route or explicit target |
 | `POST /v1/transcribe` | Multipart audio to intended/literal text, optionally translated |
 | `POST /v1/speak` | Text (optionally translated) to a merged WAV |
 | `POST /v1/transcribe-and-speak` | Multipart audio through STT, optional translation, and TTS |
@@ -88,7 +88,10 @@ curl http://alien.local:8180/v1/translate \
   -d '{"text":"buenos días","route":"inbound"}'
 ```
 
-`inbound` defaults to detected language -> English. `outbound` defaults to English -> the configured selected language. Every translation-capable endpoint accepts optional `source_language` and `target_language` overrides, so `auto`/selected source and English/selected target are available at every composition layer:
+`inbound` defaults to English as the target. `outbound` uses the configured
+selected target. EraX is multilingual and does not require a source token.
+Every translation-capable endpoint still accepts `source_language` for wire
+compatibility, but only `target_language` changes inference behavior:
 
 ```bash
 curl http://alien.local:8180/v1/translate \
