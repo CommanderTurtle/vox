@@ -1,12 +1,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)]
-    [string]$CertificatePath,
-
-    [Parameter(Mandatory)]
-    [string]$PfxPath,
-
-    [Security.SecureString]$PfxPassword,
+    [string]$CertificateThumbprint,
 
     [ValidateSet('Debug', 'Release')]
     [string]$Configuration = 'Release',
@@ -41,54 +36,19 @@ function Find-WdkTool {
     $tool.FullName
 }
 
-function Resolve-ExistingFile {
-    param(
-        [Parameter(Mandatory)]
-        [string]$Path,
-
-        [Parameter(Mandatory)]
-        [string]$Label
-    )
-
-    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
-        throw "$Label was not found: $Path"
-    }
-    (Resolve-Path -LiteralPath $Path).Path
-}
-
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent().Name
 if ($identity -ne 'NT SERVICE\TrustedInstaller') {
     throw "Run this script from the TrustedInstaller PowerShell described in the repository README. Current identity: $identity"
 }
 
-$resolvedCertificate = Resolve-ExistingFile -Path $CertificatePath -Label 'Public certificate'
-$resolvedPfx = Resolve-ExistingFile -Path $PfxPath -Label 'PFX'
-if (-not $PfxPassword) {
-    $PfxPassword = Read-Host 'PFX password' -AsSecureString
+$normalizedThumbprint = ($CertificateThumbprint -replace '\s', '').ToUpperInvariant()
+$certificatePath = "Cert:\LocalMachine\My\$normalizedThumbprint"
+if (-not (Test-Path -LiteralPath $certificatePath)) {
+    throw "The prepared LocalMachine signing certificate was not found: $certificatePath"
 }
-
-$rootCertificate = [Security.Cryptography.X509Certificates.X509Certificate2]::new($resolvedCertificate)
-& certutil.exe -addstore root $resolvedCertificate
-if ($LASTEXITCODE -ne 0) {
-    throw 'CertUtil did not import the public certificate into Cert:\LocalMachine\Root.'
-}
-
-$imported = @(Import-PfxCertificate `
-    -FilePath $resolvedPfx `
-    -CertStoreLocation 'Cert:\LocalMachine\My' `
-    -Password $PfxPassword)
-
-$signer = $imported |
-    Where-Object {
-        $_.HasPrivateKey -and
-        @($_.EnhancedKeyUsageList.ObjectId.Value) -contains $CodeSigningEku
-    } |
-    Select-Object -First 1
-if (-not $signer) {
-    throw 'The PFX did not import a certificate with a private key and the Code Signing EKU.'
-}
-if ($rootCertificate.Thumbprint -ne $signer.Thumbprint) {
-    throw 'The public certificate and the private-key certificate in the PFX do not match.'
+$signer = Get-Item -LiteralPath $certificatePath
+if (-not $signer.HasPrivateKey -or @($signer.EnhancedKeyUsageList.ObjectId.Value) -notcontains $CodeSigningEku) {
+    throw 'The prepared certificate does not have both a private key and the Code Signing EKU.'
 }
 
 $rsa = [Security.Cryptography.X509Certificates.RSACertificateExtensions]::GetRSAPrivateKey($signer)
@@ -102,11 +62,6 @@ $rsa.Dispose()
 $machineKey = Join-Path $env:ProgramData "Microsoft\Crypto\RSA\MachineKeys\$keyName"
 if (-not (Test-Path -LiteralPath $machineKey -PathType Leaf)) {
     throw "The imported private-key container was not found: $machineKey"
-}
-
-& icacls.exe $machineKey /grant 'NT SERVICE\TrustedInstaller:F'
-if ($LASTEXITCODE -ne 0) {
-    throw "TrustedInstaller access could not be granted to $machineKey."
 }
 
 & (Join-Path $PSScriptRoot 'build.ps1') `

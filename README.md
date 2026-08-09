@@ -71,10 +71,12 @@ cargo build --release --features mic-forwarder --bins
 # Build only the mic forwarder on its own:
 cargo build --release --features mic-forwarder --bin vox-mic-forwarder
 
-# From a TrustedInstaller PowerShell, after generating the CRT and PFX in WSL:
+# First prepare the Windows certificate/key ACL from Administrator-backed WSL.
+./prepare-windows-driver-signing.sh
+# Then, from TrustedInstaller PowerShell, build, sign, and install:
 .\windows-native-audio-cable\install.ps1 `
-  -CertificatePath C:\path\mycert.crt `
-  -PfxPath C:\path\mycert.pfx
+  -CertificateThumbprint '<contents of keys/windows-thumbprint.txt>' `
+  -Refresh
 ```
 
 After installing the cable, run `vox-mic-forwarder.exe --verify-cable`, then

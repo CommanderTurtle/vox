@@ -251,8 +251,8 @@ capture/loopback endpoint rather than a writable playback sink.
 
 ```powershell
 .\windows-native-audio-cable\install.ps1 `
-  -CertificatePath C:\path\mycert.crt `
-  -PfxPath C:\path\mycert.pfx
+  -CertificateThumbprint '<prepared thumbprint>' `
+  -Refresh
 ```
 
 The generated file is equivalent to:

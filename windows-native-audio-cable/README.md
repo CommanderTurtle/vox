@@ -64,35 +64,30 @@ mycert.pfx: certificate and private key imported into Cert:\LocalMachine\My
 mycert.key: original private key retained in WSL
 ```
 
-## 2. Build, sign, and install from TrustedInstaller PowerShell
+## 2. Prepare Windows signing access from Administrator-backed WSL
 
-Open the repository in a PowerShell already running as TrustedInstaller. Confirm
-the identity, then run the single installer. It prompts for the PFX password.
+WSL itself does not modify the Windows certificate stores. This command uses
+WSL interop to invoke Windows CertUtil and Administrator PowerShell under the
+Windows token that launched WSL.
 
-```powershell
-whoami
-# nt service\trustedinstaller
-
-cd C:\path\to\vox
-.\windows-native-audio-cable\install.ps1 `
-  -CertificatePath C:\Users\<you>\Desktop\vox-signing\mycert.cer `
-  -PfxPath C:\Users\<you>\Desktop\vox-signing\mycert.pfx
+```bash
+cd ~/multimedia/vox
+./prepare-windows-driver-signing.sh
+cat keys/windows-thumbprint.txt
 ```
 
-The installer performs this exact sequence.
+The preparation phase performs this exact sequence.
 
 ```text
-1. Import mycert.crt into Cert:\LocalMachine\Root.
-2. Import mycert.pfx into Cert:\LocalMachine\My.
-3. Require a private key and Code Signing EKU 1.3.6.1.5.5.7.3.3.
-4. Resolve C:\ProgramData\Microsoft\Crypto\RSA\MachineKeys\<key-guid>.
-5. Grant NT SERVICE\TrustedInstaller full control over that one key file.
-6. Build the pinned SysVAD adaptation.
-7. Sign the package catalog with SHA-256 and the imported certificate thumbprint.
-8. Install or update Root\Sysvad_ComponentizedAudioSample.
+1. certutil.exe imports the public CER into Cert:\LocalMachine\Root.
+2. Import-PfxCertificate imports the certificate and private key into Cert:\LocalMachine\My.
+3. The Code Signing EKU 1.3.6.1.5.5.7.3.3 is required.
+4. The imported CSP key is resolved under C:\ProgramData\Microsoft\Crypto\RSA\MachineKeys.
+5. icacls grants NT SERVICE\TrustedInstaller:F on that exact private-key file.
+6. The prepared certificate thumbprint is written to keys/windows-thumbprint.txt.
 ```
 
-The signing operations correspond to the following Windows commands.
+The relevant Windows operations are:
 
 ```powershell
 certutil.exe -addstore root C:\path\mycert.cer
@@ -104,7 +99,27 @@ Import-PfxCertificate `
 
 icacls "C:\ProgramData\Microsoft\Crypto\RSA\MachineKeys\<key-guid>" `
   /grant "NT SERVICE\TrustedInstaller":F
+```
 
+## 3. Build, sign, and install from TrustedInstaller PowerShell
+
+The preparation phase is complete before TrustedInstaller starts. Confirm the
+active identity, then provide the prepared thumbprint to the installer.
+
+```powershell
+whoami
+# nt service\trustedinstaller
+
+cd C:\path\to\vox
+.\windows-native-audio-cable\install.ps1 `
+  -CertificateThumbprint '<contents of keys/windows-thumbprint.txt>' `
+  -Refresh
+```
+
+The TrustedInstaller phase does not import certificates or change the private
+key ACL. It uses the already-prepared identity to build, sign, and install.
+
+```powershell
 Get-ChildItem Cert:\LocalMachine\My |
   Where-Object { $_.EnhancedKeyUsageList -match "Code Signing" } |
   Format-List Subject,Thumbprint
@@ -112,7 +127,7 @@ Get-ChildItem Cert:\LocalMachine\My |
 signtool sign /fd SHA256 /sm /s My /sha1 <thumbprint> C:\path\package.cat
 ```
 
-## 3. Configure the Vox router
+## 4. Configure the Vox router
 
 ```powershell
 .\target\release\vox-mic-forwarder.exe --verify-cable
