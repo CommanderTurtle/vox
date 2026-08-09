@@ -73,10 +73,11 @@ cargo build --release --features mic-forwarder --bin vox-mic-forwarder
 
 # First prepare the Windows certificate/key ACL from Administrator-backed WSL.
 ./prepare-windows-driver-signing.sh
-# Then, from TrustedInstaller PowerShell, build, sign, and install:
+# Build the unsigned driver from an ordinary Windows developer PowerShell.
+.\windows-native-audio-cable\build.ps1 -Refresh
+# Then sign and install from TrustedInstaller PowerShell:
 .\windows-native-audio-cable\install.ps1 `
-  -CertificateThumbprint '<contents of keys/windows-thumbprint.txt>' `
-  -Refresh
+  -CertificateThumbprint '<contents of keys/windows-thumbprint.txt>'
 ```
 
 After installing the cable, run `vox-mic-forwarder.exe --verify-cable`, then

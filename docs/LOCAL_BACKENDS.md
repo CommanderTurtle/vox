@@ -250,9 +250,9 @@ create a selectable microphone. Stereo Mix is also not a substitute: it is a
 capture/loopback endpoint rather than a writable playback sink.
 
 ```powershell
+.\windows-native-audio-cable\build.ps1 -Refresh
 .\windows-native-audio-cable\install.ps1 `
-  -CertificateThumbprint '<prepared thumbprint>' `
-  -Refresh
+  -CertificateThumbprint '<prepared thumbprint>'
 ```
 
 The generated file is equivalent to:

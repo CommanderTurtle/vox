@@ -101,7 +101,18 @@ icacls "C:\ProgramData\Microsoft\Crypto\RSA\MachineKeys\<key-guid>" `
   /grant "NT SERVICE\TrustedInstaller":F
 ```
 
-## 3. Build, sign, and install from TrustedInstaller PowerShell
+## 3. Build from an ordinary Windows developer PowerShell
+
+Do not build under a SYSTEM or impersonated TrustedInstaller token. Build the
+unsigned package under the ordinary Windows developer identity that owns the
+source tree.
+
+```powershell
+cd C:\path\to\vox
+.\windows-native-audio-cable\build.ps1 -Refresh
+```
+
+## 4. Sign and install from TrustedInstaller PowerShell
 
 The preparation phase is complete before the signing shell starts. Its token
 must either use TrustedInstaller as the primary identity or carry the enabled
@@ -115,12 +126,11 @@ whoami /groups | findstr /i TrustedInstaller
 
 cd C:\path\to\vox
 .\windows-native-audio-cable\install.ps1 `
-  -CertificateThumbprint '<contents of keys/windows-thumbprint.txt>' `
-  -Refresh
+  -CertificateThumbprint '<contents of keys/windows-thumbprint.txt>'
 ```
 
-The TrustedInstaller phase does not import certificates or change the private
-key ACL. It uses the already-prepared identity to build, sign, and install.
+The TrustedInstaller phase does not import certificates, change the private-key
+ACL, or invoke MSBuild. It only signs the existing package and installs it.
 
 ```powershell
 Get-ChildItem Cert:\LocalMachine\My |
@@ -130,7 +140,7 @@ Get-ChildItem Cert:\LocalMachine\My |
 signtool sign /fd SHA256 /sm /s My /sha1 <thumbprint> C:\path\package.cat
 ```
 
-## 4. Configure the Vox router
+## 5. Configure the Vox router
 
 ```powershell
 .\target\release\vox-mic-forwarder.exe --verify-cable

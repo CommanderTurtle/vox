@@ -1,15 +1,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)]
-    [string]$CertificateThumbprint,
-
-    [ValidateSet('Debug', 'Release')]
-    [string]$Configuration = 'Release',
-
-    [ValidateSet('x64', 'ARM64')]
-    [string]$Platform = 'x64',
-
-    [switch]$Refresh
+    [string]$CertificateThumbprint
 )
 
 $ErrorActionPreference = 'Stop'
@@ -82,12 +74,10 @@ if (-not $signer.HasPrivateKey -or $signer.EnhancedKeyUsageList -notmatch 'Code 
 
 $machineKey = Resolve-MachineKeyPath -Thumbprint $signer.Thumbprint
 
-& (Join-Path $PSScriptRoot 'build.ps1') `
-    -Configuration $Configuration `
-    -Platform $Platform `
-    -Refresh:$Refresh
-
 $package = Join-Path $PSScriptRoot 'dist\windows-native-audio-cable'
+if (-not (Test-Path -LiteralPath $package -PathType Container)) {
+    throw 'The unsigned driver package does not exist. Run build.ps1 from an ordinary Windows developer PowerShell first.'
+}
 $catalogs = @(Get-ChildItem -LiteralPath $package -Filter '*.cat' -File)
 if ($catalogs.Count -ne 1) {
     throw "Expected exactly one catalog in $package; found $($catalogs.Count)."
