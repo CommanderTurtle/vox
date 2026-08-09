@@ -3,7 +3,8 @@ name = "vox-http-router"
 version = "0.1.0"
 edition = "2021"
 description = "Private HTTP orchestration for CrisperWhisper, local translation, and LongCat TTS"
-license = "MIT"
+license = "AGPL-3.0"
+authors = ["CommanderTurtle"]
 
 [[bin]]
 name = "vox-http"

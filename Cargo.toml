@@ -7,8 +7,8 @@ resolver = "2"
 name = "vox"
 version = "0.1.2"
 edition = "2021"
-description = "Global voice input/output booster for CLI AI agents"
-authors = ["Voice Boost Team"]
+description = "Global voice input/output router for CLI AI agents"
+authors = ["CommanderTurtle"]
 
 [dependencies]
 # Async runtime

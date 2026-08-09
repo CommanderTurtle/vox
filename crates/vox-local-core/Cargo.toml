@@ -3,7 +3,7 @@ name = "vox-local-core"
 version = "0.1.0"
 edition = "2021"
 description = "Shared private backend clients for Vox desktop and HTTP routing"
-license = "MIT"
+license = "AGPL-3.0"
 
 [dependencies]
 hound = "3"

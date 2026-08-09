@@ -366,7 +366,7 @@ cargo run -- translate "<text>"              # test the local translation stage
 
 ## License
 
-MIT
+AGPLv3
 
 ---
 
