@@ -57,7 +57,7 @@ remain deliberately local to this member.
 | `POST /v1/transcribe` | Multipart audio to intended/literal text, optionally translated |
 | `POST /v1/speak` | Text (optionally translated) to a merged WAV |
 | `POST /v1/transcribe-and-speak` | Multipart audio through STT, optional translation, and TTS |
-| `POST /v1/hoist` | Multipart WAV/MP3/M4A to the virtual microphone |
+| `POST /v1/hoist` | Multipart WAV/MP3/M4A to the configured microphone router (VB-CABLE on Windows) |
 | `POST /v1/playback` | Multipart WAV/MP3/M4A to Windows' current default playback device |
 | `POST /v1/system-audio/transcribe` | Bounded latest system-audio window through STT and optional translation |
 | `POST /v1/system-audio/dub` | System audio through STT, translation, LongCat, then playback/mic/WAV |

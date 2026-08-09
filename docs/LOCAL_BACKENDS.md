@@ -232,34 +232,32 @@ cargo build --release --features mic-forwarder --bin vox-mic-forwarder
 ```
 
 `--verify-cable` fails unless the same CPAL/WASAPI enumerator used by the router
-sees both native Vox endpoints, then prints their negotiated formats.
+sees both VB-CABLE endpoints, then prints their negotiated formats.
 `--init-config` is an interactive, numbered device wizard. It saves exact
 device names into `mic-forwarder.toml` beside the router executable and does
-not require hand-written TOML. It recommends **Vox Cable Input** as the router
-output, rejects **Vox Cable Output** as a physical input, and separately asks
-for the real playback device used by the system-audio subtitle tap.
+not require hand-written TOML. It recommends **CABLE Input (VB-Audio Virtual
+Cable)** as the router output, rejects **CABLE Output (VB-Audio Virtual
+Cable)** as a physical input, and separately asks for the real playback device
+used by the system-audio subtitle tap.
 
 If `--list-devices` shows only ordinary speakers/headphones, Windows has no
 virtual microphone path available yet. The Rust router cannot create a Windows
-audio driver from user space. Build the repository's native Microsoft-SysVAD
-component in `windows-native-audio-cable`, sign its catalog with the local
-certificate/private-key process documented there, install the package, rerun
-`--list-devices`, and then rerun `--init-config`. Selecting
-headphones or speakers is useful only for monitoring/testing and does not
-create a selectable microphone. Stereo Mix is also not a substitute: it is a
-capture/loopback endpoint rather than a writable playback sink.
+audio driver from user space. Download and install the current VB-CABLE package
+from the official VB-Audio page, reboot Windows, then run the repository's
+post-install helper. Selecting headphones or speakers is useful only for
+monitoring/testing and does not create a selectable microphone. Stereo Mix is
+also not a substitute: it is a capture/loopback endpoint rather than a writable
+playback sink.
 
 ```powershell
-.\windows-native-audio-cable\build.ps1 -Refresh
-.\windows-native-audio-cable\install.ps1 `
-  -CertificateThumbprint '<prepared thumbprint>'
+.\windows-vb-cable\setup.ps1 -OpenSoundSettings
 ```
 
 The generated file is equivalent to:
 
 ```toml
 bind = "127.0.0.1:8182"
-output_device = "Vox Cable Input"
+output_device = "CABLE Input (VB-Audio Virtual Cable)"
 system_audio_enabled = true
 system_audio_device = "default"
 system_audio_sample_rate = 16000
@@ -280,7 +278,7 @@ M4A media posted to
 `POST /v1/forward`, and renders the result to `output_device`. For a virtual
 microphone, this must be the playback side of an installed virtual cable;
 choose that cable's capture side as the Windows/application microphone. The
-native Vox pair is **Vox Cable Input** and **Vox Cable Output**, respectively.
+configured pair is **CABLE Input** and **CABLE Output**, respectively. The
 physical mic remains an ordinary, live input to the mix.
 
 Running the router normally opens its small native control window. Paste or

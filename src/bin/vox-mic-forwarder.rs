@@ -16,8 +16,9 @@ use rodio::Source;
 use serde::{Deserialize, Serialize};
 use tiny_http::{Header, Method, Response, Server, StatusCode};
 
-const VOX_CABLE_RENDER_MARKER: &str = "vox cable input";
-const VOX_CABLE_CAPTURE_MARKER: &str = "vox cable output";
+const VB_CABLE_RENDER_MARKER: &str = "cable input";
+const VB_CABLE_CAPTURE_MARKER: &str = "cable output";
+const VB_CABLE_VENDOR_MARKER: &str = "vb-audio";
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 struct InputConfig {
@@ -169,7 +170,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         return Ok(());
     }
     if std::env::args().any(|argument| argument == "--verify-cable") {
-        verify_vox_cable(&host)?;
+        verify_vb_cable(&host)?;
         return Ok(());
     }
     if std::env::args().any(|argument| argument == "--init-config") {
@@ -200,7 +201,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     {
         let device = select_input(&host, &input.name)?;
         let name = device.name().unwrap_or_else(|_| input.name.clone());
-        if is_vox_cable_capture(&name) && is_vox_cable_render(&output_name) {
+        if is_vb_cable_capture(&name) && is_vb_cable_render(&output_name) {
             return Err(format!(
                 "'{name}' is the recording side of '{output_name}', not a physical microphone; selecting both would feed the virtual cable into itself"
             )
@@ -475,7 +476,7 @@ fn initialize_config(
 
     let recommended_output = output_names
         .iter()
-        .find(|name| is_vox_cable_render(name))
+        .find(|name| is_vb_cable_render(name))
         .map(String::as_str);
     let inputs = choose_inputs(&input_names, default_input.as_deref())?;
     let output = choose_one(
@@ -494,7 +495,7 @@ fn initialize_config(
 
     let system_outputs = output_names
         .iter()
-        .filter(|name| !name.eq_ignore_ascii_case(&output) && !is_vox_cable_render(name))
+        .filter(|name| !name.eq_ignore_ascii_case(&output) && !is_vb_cable_render(name))
         .cloned()
         .collect::<Vec<_>>();
     let (system_audio_enabled, system_audio_device) = if system_outputs.is_empty() {
@@ -553,8 +554,8 @@ fn choose_inputs(
     print_choices("input", names, default, None);
     let fallback = default
         .and_then(|name| names.iter().position(|candidate| candidate == name))
-        .filter(|index| !is_vox_cable_capture(&names[*index]))
-        .or_else(|| names.iter().position(|name| !is_vox_cable_capture(name)))
+        .filter(|index| !is_vb_cable_capture(&names[*index]))
+        .or_else(|| names.iter().position(|name| !is_vb_cable_capture(name)))
         .unwrap_or(0);
     let answer = prompt(&format!(
         "Select input number(s), comma-separated [{}]: ",
@@ -576,9 +577,9 @@ fn choose_inputs(
         .into_iter()
         .map(|index| names[index].clone())
         .collect::<Vec<_>>();
-    if let Some(name) = selected.iter().find(|name| is_vox_cable_capture(name)) {
+    if let Some(name) = selected.iter().find(|name| is_vb_cable_capture(name)) {
         return Err(format!(
-            "'{name}' is the Vox virtual recording endpoint; choose a physical microphone to avoid a feedback loop"
+            "'{name}' is VB-CABLE's virtual recording endpoint; choose a physical microphone to avoid a feedback loop"
         )
         .into());
     }
@@ -612,7 +613,7 @@ fn print_choices(kind: &str, names: &[String], default: Option<&str>, recommende
         let marker = match (
             Some(name.as_str()) == default,
             Some(name.as_str()) == recommended,
-            is_vox_cable_capture(name),
+            is_vb_cable_capture(name),
         ) {
             (true, true, _) => " (recommended; Windows default)",
             (_, true, _) => " (recommended)",
@@ -670,12 +671,14 @@ fn looks_virtual(name: &str) -> bool {
         .any(|marker| name.contains(marker))
 }
 
-fn is_vox_cable_render(name: &str) -> bool {
-    name.to_ascii_lowercase().contains(VOX_CABLE_RENDER_MARKER)
+fn is_vb_cable_render(name: &str) -> bool {
+    let name = name.to_ascii_lowercase();
+    name.contains(VB_CABLE_RENDER_MARKER) && name.contains(VB_CABLE_VENDOR_MARKER)
 }
 
-fn is_vox_cable_capture(name: &str) -> bool {
-    name.to_ascii_lowercase().contains(VOX_CABLE_CAPTURE_MARKER)
+fn is_vb_cable_capture(name: &str) -> bool {
+    let name = name.to_ascii_lowercase();
+    name.contains(VB_CABLE_CAPTURE_MARKER) && name.contains(VB_CABLE_VENDOR_MARKER)
 }
 
 fn print_devices(host: &cpal::Host) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -694,21 +697,25 @@ fn print_devices(host: &cpal::Host) -> Result<(), Box<dyn std::error::Error + Se
     Ok(())
 }
 
-fn verify_vox_cable(host: &cpal::Host) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+fn verify_vb_cable(host: &cpal::Host) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let capture = host
         .input_devices()?
-        .find(|device| device.name().is_ok_and(|name| is_vox_cable_capture(&name)))
-        .ok_or("Vox Cable Output is not present in Windows recording endpoints")?;
+        .find(|device| device.name().is_ok_and(|name| is_vb_cable_capture(&name)))
+        .ok_or(
+            "CABLE Output (VB-Audio Virtual Cable) is not present in Windows recording endpoints",
+        )?;
     let render = host
         .output_devices()?
-        .find(|device| device.name().is_ok_and(|name| is_vox_cable_render(&name)))
-        .ok_or("Vox Cable Input is not present in Windows playback endpoints")?;
+        .find(|device| device.name().is_ok_and(|name| is_vb_cable_render(&name)))
+        .ok_or(
+            "CABLE Input (VB-Audio Virtual Cable) is not present in Windows playback endpoints",
+        )?;
 
     let capture_name = capture.name()?;
     let capture_format = capture.default_input_config()?;
     let render_name = render.name()?;
     let render_format = render.default_output_config()?;
-    println!("Vox native cable is visible to the same CPAL/WASAPI enumerator used by the router:");
+    println!("VB-CABLE is visible to the same CPAL/WASAPI enumerator used by the router:");
     println!(
         "  recording: '{}' — {} Hz / {} channel(s) / {:?}",
         capture_name,
@@ -1274,9 +1281,9 @@ mod tests {
     }
 
     #[test]
-    fn vox_endpoint_markers_tolerate_windows_name_wrappers() {
-        assert!(is_vox_cable_render("Speakers (Vox Cable Input)"));
-        assert!(is_vox_cable_capture("Microphone (Vox Cable Output)"));
-        assert!(!is_vox_cable_capture("Headset (Nicholas's AirPods)"));
+    fn vb_cable_endpoint_markers_tolerate_windows_name_wrappers() {
+        assert!(is_vb_cable_render("CABLE Input (VB-Audio Virtual Cable)"));
+        assert!(is_vb_cable_capture("CABLE Output (VB-Audio Virtual Cable)"));
+        assert!(!is_vb_cable_capture("Headset (Nicholas's AirPods)"));
     }
 }

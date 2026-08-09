@@ -25,7 +25,7 @@ Crisper Translate LongCat Router
 5. STT -> translate -> TTS
 6. text -> translate -> TTS
 7. text -> TTS
-8. file -> virtual microphone or default playback
+8. file -> configured microphone router (VB-CABLE on Windows) or default playback
 9. system audio -> STT -> optional translate -> text
 10. system audio -> STT -> optional translate -> LongCat -> playback/mic/WAV
 

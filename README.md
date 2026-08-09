@@ -70,29 +70,25 @@ part of an ordinary Vox build:
 cargo build --release --features mic-forwarder --bins
 # Build only the mic forwarder on its own:
 cargo build --release --features mic-forwarder --bin vox-mic-forwarder
-
-# First prepare the Windows certificate/key ACL from Administrator-backed WSL.
-./prepare-windows-driver-signing.sh
-# Build the unsigned driver from an ordinary Windows developer PowerShell.
-.\windows-native-audio-cable\build.ps1 -Refresh
-# Then sign and install from TrustedInstaller PowerShell:
-.\windows-native-audio-cable\install.ps1 `
-  -CertificateThumbprint '<contents of keys/windows-thumbprint.txt>'
 ```
 
-After installing the cable, run `vox-mic-forwarder.exe --verify-cable`, then
-`vox-mic-forwarder.exe --init-config`. Verification uses the router's actual
-CPAL/WASAPI enumerator. The numbered wizard recommends **Vox Cable Input**,
-rejects the cable's recording side as a physical input, separately selects the
-real system-audio playback device, and writes executable-local TOML.
-`--list-devices` still provides the complete device inventory.
+On Windows, install the current VB-CABLE package from the
+[official VB-Audio page](https://vb-audio.com/Cable/), reboot, and run:
 
-Vox includes an optional first-party `windows-native-audio-cable` component
-for that missing endpoint. It reproducibly adapts Microsoft's pinned SysVAD
-sample into **Vox Cable Input** (playback) and **Vox Cable Output** (recording),
-without installing a third-party cable implementation. Its WDK build and
-locally generated certificate/private-key signing instructions live in
-[`windows-native-audio-cable/README.md`](windows-native-audio-cable/README.md).
+```powershell
+.\windows-vb-cable\setup.ps1 -OpenSoundSettings
+```
+
+The setup helper builds the optional router if needed, verifies **CABLE Input**
+and **CABLE Output** through the router's actual CPAL/WASAPI enumerator, and
+launches the numbered device wizard. Choose real physical microphones as
+inputs; Vox writes the completed mix to **CABLE Input**, while applications use
+**CABLE Output** as their microphone. System playback remains on the existing
+speakers/headphones and stays isolated in the subtitle-only capture lane.
+
+VB-CABLE is separately downloaded and installed under its own license; Vox does
+not bundle or silently install it. See the
+[`windows-vb-cable` integration guide](windows-vb-cable/README.md).
 
 The private backend-only gateway is an equally optional workspace member. It
 shares CrisperWhisper and LongCat behavior with desktop Vox without pulling in
