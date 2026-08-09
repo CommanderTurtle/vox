@@ -70,20 +70,29 @@ if ($LASTEXITCODE -ne 0) {
     throw 'CertUtil did not import the public certificate into Cert:\LocalMachine\Root.'
 }
 
-$plainPassword = (Get-Content -LiteralPath $resolvedPassword -Raw).Trim()
-$securePassword = ConvertTo-SecureString -String $plainPassword -AsPlainText -Force
-$imported = @(Import-PfxCertificate `
-    -FilePath $resolvedPfx `
-    -CertStoreLocation 'Cert:\LocalMachine\My' `
-    -Password $securePassword)
-$plainPassword = $null
-
-$signer = $imported |
-    Where-Object {
-        $_.HasPrivateKey -and
-        $_.EnhancedKeyUsageList -match 'Code Signing'
-    } |
-    Select-Object -First 1
+$machineCertificatePath = "Cert:\LocalMachine\My\$($rootCertificate.Thumbprint)"
+$signer = if (Test-Path -LiteralPath $machineCertificatePath) {
+    Get-Item -LiteralPath $machineCertificatePath |
+        Where-Object {
+            $_.HasPrivateKey -and
+            $_.EnhancedKeyUsageList -match 'Code Signing'
+        }
+}
+else {
+    $plainPassword = (Get-Content -LiteralPath $resolvedPassword -Raw).Trim()
+    $securePassword = ConvertTo-SecureString -String $plainPassword -AsPlainText -Force
+    $imported = @(Import-PfxCertificate `
+        -FilePath $resolvedPfx `
+        -CertStoreLocation 'Cert:\LocalMachine\My' `
+        -Password $securePassword)
+    $plainPassword = $null
+    $imported |
+        Where-Object {
+            $_.HasPrivateKey -and
+            $_.EnhancedKeyUsageList -match 'Code Signing'
+        } |
+        Select-Object -First 1
+}
 if (-not $signer) {
     throw "The PFX did not import a certificate with a private key and Code Signing EKU $CodeSigningEku."
 }
