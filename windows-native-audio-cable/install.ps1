@@ -59,10 +59,16 @@ function Resolve-MachineKeyPath {
     $path
 }
 
-$identity = [Security.Principal.WindowsIdentity]::GetCurrent().Name
-if ($identity -ne 'NT SERVICE\TrustedInstaller') {
-    throw "Run this script from the TrustedInstaller PowerShell described in the repository README. Current identity: $identity"
+$identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+$principal = [Security.Principal.WindowsPrincipal]::new($identity)
+$trustedInstallerSid = [Security.Principal.NTAccount]::new(
+    'NT SERVICE', 'TrustedInstaller').Translate([Security.Principal.SecurityIdentifier])
+$isTrustedInstallerIdentity = $identity.User -eq $trustedInstallerSid
+$hasTrustedInstallerGroup = $principal.IsInRole($trustedInstallerSid)
+if (-not $isTrustedInstallerIdentity -and -not $hasTrustedInstallerGroup) {
+    throw "The active Windows token does not contain an enabled TrustedInstaller SID. Current identity: $($identity.Name)"
 }
+Write-Host "Signing token: $($identity.Name) (TrustedInstaller SID enabled)"
 
 $normalizedThumbprint = ($CertificateThumbprint -replace '\s', '').ToUpperInvariant()
 $certificatePath = "Cert:\LocalMachine\My\$normalizedThumbprint"

@@ -103,12 +103,15 @@ icacls "C:\ProgramData\Microsoft\Crypto\RSA\MachineKeys\<key-guid>" `
 
 ## 3. Build, sign, and install from TrustedInstaller PowerShell
 
-The preparation phase is complete before TrustedInstaller starts. Confirm the
-active identity, then provide the prepared thumbprint to the installer.
+The preparation phase is complete before the signing shell starts. Its token
+must either use TrustedInstaller as the primary identity or carry the enabled
+`NT SERVICE\TrustedInstaller` group SID. A SYSTEM token with that enabled group
+is accepted. Then provide the prepared thumbprint to the installer.
 
 ```powershell
 whoami
-# nt service\trustedinstaller
+whoami /groups | findstr /i TrustedInstaller
+# The group must be enabled when whoami is not NT SERVICE\TrustedInstaller.
 
 cd C:\path\to\vox
 .\windows-native-audio-cable\install.ps1 `
