@@ -18,3 +18,4 @@ Thumbs.db
 # Local config / secrets (API keys must never be committed)
 .env
 *.local.toml
+/keys/
