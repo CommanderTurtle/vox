@@ -8,7 +8,6 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$PrerequisiteInstaller = Join-Path $PSScriptRoot 'install-wdk-prerequisites.ps1'
 $VsWhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
 $WdkTargets = Get-ChildItem -Path (Join-Path ${env:ProgramFiles(x86)} 'Windows Kits\10\build') -Filter 'WindowsDriver.Common.targets' -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
 $MSBuild = $null
@@ -19,20 +18,12 @@ if (Test-Path -LiteralPath $VsWhere) {
     }
 }
 if (-not (Test-Path -LiteralPath $VsWhere) -or -not $WdkTargets -or -not $MSBuild) {
-    if (-not (Test-Path -LiteralPath $PrerequisiteInstaller)) {
-        throw 'The WDK is incomplete and its automatic prerequisite installer is missing.'
-    }
-    Write-Host 'The complete Microsoft driver build environment is not present; installing it now...'
-    & $PrerequisiteInstaller
-    $MSBuild = & $VsWhere -latest -products * -requires Microsoft.Component.MSBuild -requires Component.Microsoft.Windows.DriverKit -find 'MSBuild\**\Bin\amd64\MSBuild.exe' | Select-Object -First 1
-    if (-not $MSBuild) {
-        $MSBuild = & $VsWhere -latest -products * -requires Microsoft.Component.MSBuild -requires Component.Microsoft.Windows.DriverKit -find 'MSBuild\**\Bin\MSBuild.exe' | Select-Object -First 1
-    }
+    throw 'Visual Studio MSBuild and the Windows Driver Kit build targets are required.'
 }
-if (-not $MSBuild) { throw 'MSBuild with the Windows Driver Kit component was not found after prerequisite installation.' }
+if (-not $MSBuild) { throw 'MSBuild with the Windows Driver Kit component was not found.' }
 
 $WdkTargets = Get-ChildItem -Path (Join-Path ${env:ProgramFiles(x86)} 'Windows Kits\10\build') -Filter 'WindowsDriver.Common.targets' -Recurse -ErrorAction SilentlyContinue | Sort-Object FullName -Descending | Select-Object -First 1
-if (-not $WdkTargets) { throw 'Windows Driver Kit build targets were not found after prerequisite installation.' }
+if (-not $WdkTargets) { throw 'Windows Driver Kit build targets were not found.' }
 
 & (Join-Path $PSScriptRoot 'sync-microsoft-sysvad.ps1') -Refresh:$Refresh
 
@@ -65,4 +56,4 @@ New-Item -ItemType Directory -Force -Path $Dist | Out-Null
 Copy-Item -Path (Join-Path $Package.FullName '*') -Destination $Dist -Recurse -Force
 
 Write-Host "Vox native cable package: $Dist"
-Write-Host 'The package is unsigned. Run sign-package.ps1 from an elevated PowerShell 7.1+ before installation.'
+Write-Host 'The package is ready for the certificate-backed signing step in install.ps1.'

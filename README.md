@@ -71,10 +71,10 @@ cargo build --release --features mic-forwarder --bins
 # Build only the mic forwarder on its own:
 cargo build --release --features mic-forwarder --bin vox-mic-forwarder
 
-# View .\windows-native-audio-cable\README.md for organizational signing:
-# Run the automated install for the driver:
-.\windows-native-audio-cable\install-development.ps1
-# It might request reboot. If it does, reboot and run again to finish
+# From a TrustedInstaller PowerShell, after generating the CRT and PFX in WSL:
+.\windows-native-audio-cable\install.ps1 `
+  -CertificatePath C:\path\mycert.crt `
+  -PfxPath C:\path\mycert.pfx
 ```
 
 After installing the cable, run `vox-mic-forwarder.exe --verify-cable`, then
@@ -87,9 +87,8 @@ real system-audio playback device, and writes executable-local TOML.
 Vox includes an optional first-party `windows-native-audio-cable` component
 for that missing endpoint. It reproducibly adapts Microsoft's pinned SysVAD
 sample into **Vox Cable Input** (playback) and **Vox Cable Output** (recording),
-without installing a third-party cable implementation. Its WDK build,
-ephemeral machine-key catalog signing, and isolated one-time test-boot
-instructions live in
+without installing a third-party cable implementation. Its WDK build and
+locally generated certificate/private-key signing instructions live in
 [`windows-native-audio-cable/README.md`](windows-native-audio-cable/README.md).
 
 The private backend-only gateway is an equally optional workspace member. It

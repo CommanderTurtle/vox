@@ -242,13 +242,18 @@ for the real playback device used by the system-audio subtitle tap.
 If `--list-devices` shows only ordinary speakers/headphones, Windows has no
 virtual microphone path available yet. The Rust router cannot create a Windows
 audio driver from user space. Build the repository's native Microsoft-SysVAD
-component in `windows-native-audio-cable`, sign its catalog with the component's
-ephemeral Administrator/SYSTEM-only machine key, boot the separate Vox Driver
-Test entry once, install the signed development package, rerun `--list-devices`,
-and then rerun `--init-config`. Selecting
+component in `windows-native-audio-cable`, sign its catalog with the local
+certificate/private-key process documented there, install the package, rerun
+`--list-devices`, and then rerun `--init-config`. Selecting
 headphones or speakers is useful only for monitoring/testing and does not
 create a selectable microphone. Stereo Mix is also not a substitute: it is a
 capture/loopback endpoint rather than a writable playback sink.
+
+```powershell
+.\windows-native-audio-cable\install.ps1 `
+  -CertificatePath C:\path\mycert.crt `
+  -PfxPath C:\path\mycert.pfx
+```
 
 The generated file is equivalent to:
 
