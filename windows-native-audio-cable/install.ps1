@@ -47,7 +47,7 @@ if (-not (Test-Path -LiteralPath $certificatePath)) {
     throw "The prepared LocalMachine signing certificate was not found: $certificatePath"
 }
 $signer = Get-Item -LiteralPath $certificatePath
-if (-not $signer.HasPrivateKey -or @($signer.EnhancedKeyUsageList.ObjectId.Value) -notcontains $CodeSigningEku) {
+if (-not $signer.HasPrivateKey -or $signer.EnhancedKeyUsageList -notmatch 'Code Signing') {
     throw 'The prepared certificate does not have both a private key and the Code Signing EKU.'
 }
 

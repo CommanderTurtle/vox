@@ -58,11 +58,11 @@ $plainPassword = $null
 $signer = $imported |
     Where-Object {
         $_.HasPrivateKey -and
-        @($_.EnhancedKeyUsageList.ObjectId.Value) -contains $CodeSigningEku
+        $_.EnhancedKeyUsageList -match 'Code Signing'
     } |
     Select-Object -First 1
 if (-not $signer) {
-    throw 'The PFX did not import a certificate with a private key and the Code Signing EKU.'
+    throw "The PFX did not import a certificate with a private key and Code Signing EKU $CodeSigningEku."
 }
 if ($rootCertificate.Thumbprint -ne $signer.Thumbprint) {
     throw 'The public certificate and the private-key certificate in the PFX do not match.'
