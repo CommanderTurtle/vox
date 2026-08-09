@@ -36,6 +36,29 @@ function Find-WdkTool {
     $tool.FullName
 }
 
+function Resolve-MachineKeyPath {
+    param(
+        [Parameter(Mandatory)]
+        [string]$Thumbprint
+    )
+
+    $storeDetails = @(& certutil.exe -store My $Thumbprint 2>&1)
+    if ($LASTEXITCODE -ne 0) {
+        throw "CertUtil could not inspect Cert:\LocalMachine\My\$Thumbprint."
+    }
+    $containerLine = $storeDetails |
+        Where-Object { $_ -match '^\s*Unique container name:\s*(.+?)\s*$' } |
+        Select-Object -First 1
+    if (-not $containerLine -or $containerLine -notmatch '^\s*Unique container name:\s*(.+?)\s*$') {
+        throw 'CertUtil did not report a unique RSA MachineKeys container name.'
+    }
+    $path = Join-Path $env:ProgramData "Microsoft\Crypto\RSA\MachineKeys\$($Matches[1])"
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+        throw "The prepared private-key container was not found: $path"
+    }
+    $path
+}
+
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent().Name
 if ($identity -ne 'NT SERVICE\TrustedInstaller') {
     throw "Run this script from the TrustedInstaller PowerShell described in the repository README. Current identity: $identity"
@@ -51,18 +74,7 @@ if (-not $signer.HasPrivateKey -or $signer.EnhancedKeyUsageList -notmatch 'Code 
     throw 'The prepared certificate does not have both a private key and the Code Signing EKU.'
 }
 
-$rsa = [Security.Cryptography.X509Certificates.RSACertificateExtensions]::GetRSAPrivateKey($signer)
-if (-not ($rsa -is [Security.Cryptography.RSACryptoServiceProvider])) {
-    if ($rsa) { $rsa.Dispose() }
-    throw 'The imported RSA private key is not stored in the PDF-specified MachineKeys container.'
-}
-$keyName = $rsa.CspKeyContainerInfo.UniqueKeyContainerName
-$rsa.Dispose()
-
-$machineKey = Join-Path $env:ProgramData "Microsoft\Crypto\RSA\MachineKeys\$keyName"
-if (-not (Test-Path -LiteralPath $machineKey -PathType Leaf)) {
-    throw "The imported private-key container was not found: $machineKey"
-}
+$machineKey = Resolve-MachineKeyPath -Thumbprint $signer.Thumbprint
 
 & (Join-Path $PSScriptRoot 'build.ps1') `
     -Configuration $Configuration `
