@@ -162,6 +162,92 @@ target_language = "English"
 source_language = "English"
 target_language = "Spanish"
 
+# Programmable end-to-end actions. All remain available from the tray; the
+# hotkeys can be changed or cleared independently in Settings → Routes.
+[[route_presets]]
+id = "system-de-en-caption"
+name = "German system audio → English captions"
+enabled = true
+hotkey = "Ctrl+Alt+1"
+input = "system"
+source_language = "de"
+transcript_mode = "intended"
+translate = true
+target_language = "English"
+output = "caption"
+
+[[route_presets]]
+id = "mic-en-tts-mic"
+name = "English microphone → cloned voice microphone"
+enabled = true
+hotkey = "Ctrl+Alt+2"
+input = "microphone"
+source_language = "en"
+transcript_mode = "intended"
+translate = false
+target_language = "English"
+output = "mic_forwarder"
+
+[[route_presets]]
+id = "system-en-caption"
+name = "English system audio → English captions"
+enabled = true
+hotkey = "Ctrl+Alt+3"
+input = "system"
+source_language = "en"
+transcript_mode = "intended"
+translate = false
+target_language = "English"
+output = "caption"
+
+[[route_presets]]
+id = "text-tts-mic"
+name = "Selected text → cloned voice microphone"
+enabled = true
+hotkey = "Ctrl+Alt+4"
+input = "selection"
+source_language = "detect"
+transcript_mode = "intended"
+translate = false
+target_language = "English"
+output = "mic_forwarder"
+
+[[route_presets]]
+id = "text-en-clipboard"
+name = "Selected text → English clipboard"
+enabled = true
+hotkey = "Ctrl+Alt+5"
+input = "selection"
+source_language = "detect"
+transcript_mode = "intended"
+translate = true
+target_language = "English"
+output = "clipboard"
+
+[[route_presets]]
+id = "mic-en-caption"
+name = "English microphone → English captions"
+enabled = true
+hotkey = "Ctrl+Alt+6"
+input = "microphone"
+source_language = "en"
+transcript_mode = "intended"
+translate = false
+target_language = "English"
+output = "caption"
+
+[[route_presets]]
+id = "mic-en-zh-clipboard"
+name = "English microphone → Chinese clipboard"
+enabled = true
+hotkey = "Ctrl+Alt+7"
+input = "microphone"
+source_language = "en"
+transcript_mode = "intended"
+translate = true
+target_language = "Chinese"
+output = "clipboard"
+
 [general]
 autostart = true
 language = "auto"

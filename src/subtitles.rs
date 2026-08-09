@@ -14,7 +14,15 @@ use crate::tts::longcat_tts::LongCatTtsEngine;
 use crate::tts::playback::{self, AudioFormat};
 use crate::tts::TtsEngine;
 
-pub fn run(source: &str, translate: bool, dub: bool) -> Result<(), Box<dyn std::error::Error>> {
+pub fn run(
+    source: &str,
+    translate: bool,
+    dub: bool,
+    source_language: Option<&str>,
+    target_language: Option<&str>,
+    transcript_mode: Option<&str>,
+    route_name: Option<&str>,
+) -> Result<(), Box<dyn std::error::Error>> {
     let manager = ConfigManager::load_or_create()?;
     let config = manager.read().clone();
     let source = if source.eq_ignore_ascii_case("microphone") || source.eq_ignore_ascii_case("mic")
@@ -28,12 +36,24 @@ pub fn run(source: &str, translate: bool, dub: bool) -> Result<(), Box<dyn std::
     } else {
         "System audio"
     };
-    let source_language = if source == "microphone" {
-        config.subtitles.microphone_language.clone()
-    } else {
-        config.subtitles.system_language.clone()
-    };
-    let target_language = config.subtitles.target_language.clone();
+    let source_language = source_language
+        .filter(|value| !value.trim().is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| {
+            if source == "microphone" {
+                config.subtitles.microphone_language.clone()
+            } else {
+                config.subtitles.system_language.clone()
+            }
+        });
+    let target_language = target_language
+        .filter(|value| !value.trim().is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| config.subtitles.target_language.clone());
+    let transcript_mode = transcript_mode
+        .filter(|value| !value.trim().is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| config.asr.crisper.mode.clone());
     let (tx, rx) = std::sync::mpsc::channel();
     let stop = Arc::new(AtomicBool::new(false));
     spawn_caption_worker(
@@ -41,19 +61,25 @@ pub fn run(source: &str, translate: bool, dub: bool) -> Result<(), Box<dyn std::
         source.to_string(),
         source_language.clone(),
         target_language.clone(),
+        transcript_mode,
         translate || dub,
         dub,
         tx,
         stop.clone(),
     );
 
-    let title = if dub {
-        format!("Vox — {source_label} translated dub")
-    } else if translate {
-        format!("Vox — {source_label} → {target_language}")
-    } else {
-        format!("Vox — {source_label} ({source_language})")
-    };
+    let title = route_name
+        .filter(|value| !value.trim().is_empty())
+        .map(|name| format!("Vox — {name}"))
+        .unwrap_or_else(|| {
+            if dub {
+                format!("Vox — {source_label} translated dub")
+            } else if translate {
+                format!("Vox — {source_label} → {target_language}")
+            } else {
+                format!("Vox — {source_label} ({source_language})")
+            }
+        });
     let high_refresh = HighRefreshGuard::new();
     log::info!(
         "Subtitle presentation cadence: {} Hz (native display detection)",
@@ -241,6 +267,7 @@ fn spawn_caption_worker(
     source: String,
     source_language: String,
     target_language: String,
+    transcript_mode: String,
     translate: bool,
     dub: bool,
     sender: std::sync::mpsc::Sender<String>,
@@ -261,6 +288,7 @@ fn spawn_caption_worker(
                 .expect("subtitle HTTP client");
             let mut crisper_config = config.asr.crisper.clone();
             crisper_config.language = source_language.clone();
+            crisper_config.mode = transcript_mode;
             let crisper = CrisperWhisperEngine::new(&crisper_config);
             let translator = Translator::new(&config.translate);
             let longcat = LongCatTtsEngine::new(&config.tts.longcat);

@@ -14,6 +14,7 @@ use crate::config::Config;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SettingsPage {
+    Routes,
     Translation,
     Hotkeys,
     SpeechInput,
@@ -54,7 +55,7 @@ pub fn spawn_settings_window(initial: Config, save_tx: crossbeam::channel::Sende
 fn run_settings_window(request: SettingsRequest) {
     let mut options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([620.0, 720.0])
+            .with_inner_size([960.0, 780.0])
             .with_resizable(true),
         ..Default::default()
     };
@@ -73,7 +74,7 @@ fn run_settings_window(request: SettingsRequest) {
     let app = SettingsApp {
         config: request.initial,
         save_tx: request.save_tx,
-        page: SettingsPage::Translation,
+        page: SettingsPage::Routes,
     };
 
     if let Err(error) =
@@ -99,8 +100,9 @@ impl eframe::App for SettingsApp {
             ui.heading("vox Settings");
             ui.horizontal_wrapped(|ui| {
                 for (page, label) in [
-                    (SettingsPage::Translation, "Translation & flows"),
-                    (SettingsPage::Hotkeys, "Hotkeys"),
+                    (SettingsPage::Routes, "Routes"),
+                    (SettingsPage::Translation, "Translation backend"),
+                    (SettingsPage::Hotkeys, "Legacy hotkeys"),
                     (SettingsPage::SpeechInput, "Speech input"),
                     (SettingsPage::SpeechOutput, "Speech output"),
                     (SettingsPage::General, "General"),
@@ -114,6 +116,7 @@ impl eframe::App for SettingsApp {
                 .auto_shrink([false, false])
                 .max_height(content_height)
                 .show(ui, |ui| match self.page {
+                    SettingsPage::Routes => self.render_routes(ui),
                     SettingsPage::Translation => self.render_translate(ui),
                     SettingsPage::Hotkeys => self.render_hotkeys(ui),
                     SettingsPage::SpeechInput => {
@@ -140,6 +143,184 @@ impl eframe::App for SettingsApp {
 }
 
 impl SettingsApp {
+    fn render_routes(&mut self, ui: &mut egui::Ui) {
+        ui.heading("Programmable local routes");
+        ui.label("Each row is independent: its own source, Crisper language, optional translation target, destination, tray action, and live-reloadable hotkey.");
+        ui.label(egui::RichText::new("Caption routes launch independent windows and router cursors, so native and translated views—even two translations from the same device—can remain active together.").small());
+        ui.add_space(8.0);
+
+        egui::Grid::new("route-overview")
+            .striped(true)
+            .num_columns(4)
+            .show(ui, |ui| {
+                ui.strong("On");
+                ui.strong("Route");
+                ui.strong("Flow");
+                ui.strong("Hotkey");
+                ui.end_row();
+                for preset in &self.config.route_presets {
+                    ui.label(if preset.enabled { "✓" } else { "—" });
+                    ui.label(&preset.name);
+                    ui.label(preset.summary());
+                    ui.monospace(if preset.hotkey.trim().is_empty() {
+                        "tray only"
+                    } else {
+                        &preset.hotkey
+                    });
+                    ui.end_row();
+                }
+            });
+        ui.add_space(10.0);
+
+        let mut remove = None;
+        for (index, preset) in self.config.route_presets.iter_mut().enumerate() {
+            ui.push_id(format!("route-editor-{index}"), |ui| {
+                ui.group(|ui| {
+                    ui.horizontal(|ui| {
+                        ui.checkbox(&mut preset.enabled, "Enabled");
+                        ui.label("Name:");
+                        ui.add(
+                            egui::TextEdit::singleline(&mut preset.name)
+                                .desired_width(360.0),
+                        );
+                        ui.label("Hotkey:");
+                        ui.add(
+                            egui::TextEdit::singleline(&mut preset.hotkey)
+                                .desired_width(130.0)
+                                .hint_text("blank = tray only"),
+                        );
+                        if ui.button("Remove").clicked() {
+                            remove = Some(index);
+                        }
+                    });
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label("Input:");
+                        egui::ComboBox::from_id_salt("input")
+                            .selected_text(&preset.input)
+                            .show_ui(ui, |ui| {
+                                for (value, label) in [
+                                    ("microphone", "Microphone"),
+                                    ("system", "System audio"),
+                                    ("selection", "Selected text"),
+                                    ("clipboard", "Clipboard text"),
+                                ] {
+                                    ui.selectable_value(
+                                        &mut preset.input,
+                                        value.to_string(),
+                                        label,
+                                    );
+                                }
+                            });
+                        if preset.is_audio_input() {
+                            Self::spoken_language_combo(
+                                ui,
+                                "source-language",
+                                "Crisper source",
+                                &mut preset.source_language,
+                            );
+                            egui::ComboBox::from_id_salt("transcript-mode")
+                                .selected_text(&preset.transcript_mode)
+                                .show_ui(ui, |ui| {
+                                    ui.selectable_value(
+                                        &mut preset.transcript_mode,
+                                        "intended".into(),
+                                        "Intended",
+                                    );
+                                    ui.selectable_value(
+                                        &mut preset.transcript_mode,
+                                        "literal".into(),
+                                        "Literal",
+                                    );
+                                });
+                        }
+                        ui.checkbox(&mut preset.translate, "Translate");
+                        if preset.translate {
+                            ui.label("Target:");
+                            ui.add(
+                                egui::TextEdit::singleline(&mut preset.target_language)
+                                    .desired_width(110.0),
+                            );
+                        }
+                        ui.label("Output:");
+                        egui::ComboBox::from_id_salt("output")
+                            .selected_text(&preset.output)
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(
+                                    &mut preset.output,
+                                    "caption".into(),
+                                    "Caption window",
+                                );
+                                ui.selectable_value(
+                                    &mut preset.output,
+                                    "clipboard".into(),
+                                    "Clipboard text",
+                                );
+                                ui.selectable_value(
+                                    &mut preset.output,
+                                    "mic_forwarder".into(),
+                                    "TTS → microphone",
+                                );
+                            });
+                    });
+                    ui.monospace(preset.summary());
+                    if preset.input == "system" && preset.output != "caption" {
+                        ui.colored_label(
+                            egui::Color32::YELLOW,
+                            "System-audio presets currently use continuous caption output; use vox-http for one-shot system-audio routing.",
+                        );
+                    }
+                    if preset.is_text_input() && preset.output == "caption" {
+                        ui.colored_label(
+                            egui::Color32::YELLOW,
+                            "Text input needs Clipboard or TTS → microphone output.",
+                        );
+                    }
+                });
+            });
+            ui.add_space(6.0);
+        }
+        if let Some(index) = remove {
+            self.config.route_presets.remove(index);
+        }
+        if ui.button("＋ Add route").clicked() {
+            let number = self.config.route_presets.len() + 1;
+            self.config
+                .route_presets
+                .push(crate::config::RoutePresetConfig {
+                    id: format!("user-route-{number}"),
+                    name: format!("User route {number}"),
+                    enabled: true,
+                    hotkey: String::new(),
+                    input: "clipboard".into(),
+                    source_language: "detect".into(),
+                    transcript_mode: "intended".into(),
+                    translate: false,
+                    target_language: "English".into(),
+                    output: "clipboard".into(),
+                });
+        }
+
+        ui.add_space(16.0);
+        ui.label(egui::RichText::new("Live-caption engine").strong());
+        ui.horizontal(|ui| {
+            ui.label("Microphone router:");
+            ui.add(
+                egui::TextEdit::singleline(&mut self.config.subtitles.router_url)
+                    .desired_width(330.0),
+            );
+            ui.label("Rolling window:");
+            ui.add(
+                egui::DragValue::new(&mut self.config.subtitles.chunk_seconds)
+                    .range(0.5..=15.0)
+                    .suffix("s"),
+            );
+            ui.label("Font:");
+            ui.add(egui::DragValue::new(&mut self.config.subtitles.font_size).range(14.0..=72.0));
+            ui.label("Lines:");
+            ui.add(egui::DragValue::new(&mut self.config.subtitles.max_lines).range(1..=10));
+        });
+    }
+
     fn render_hotkeys(&mut self, ui: &mut egui::Ui) {
         ui.label(egui::RichText::new("Hotkeys").strong());
         ui.horizontal(|ui| {
@@ -746,8 +927,8 @@ impl SettingsApp {
     }
 
     fn render_translate(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Private language routes");
-        ui.label("Seven explicit local routes compose CrisperWhisper, the optional EraX-VL/XLM spoken-language MITM, multilingual EraX translation, and LongCat. No cloud fallback.");
+        ui.heading("Private translation backend");
+        ui.label("Multilingual EraX translation and the optional EraX-VL/XLM spoken-language MITM remain entirely local. Configure end-to-end actions on the Routes page.");
         ui.add_space(6.0);
         ui.checkbox(
             &mut self.config.translate.enabled,
@@ -816,129 +997,6 @@ impl SettingsApp {
             "Outbound",
             &mut self.config.translate.outbound,
         );
-        ui.add_space(10.0);
-
-        ui.label(
-            egui::RichText::new("Complete route matrix")
-                .strong()
-                .size(16.0),
-        );
-        ui.label(egui::RichText::new("Sound can be microphone or system audio. A Detect source runs the full multilingual MITM on every chunk; it never latches into a previous language.").small());
-        egui::Grid::new("translation_flow_matrix")
-            .striped(true)
-            .num_columns(5)
-            .show(ui, |ui| {
-                ui.strong("Route");
-                ui.strong("Input");
-                ui.strong("Pipeline");
-                ui.strong("Result");
-                ui.strong("Hotkey");
-                ui.end_row();
-                for (route, input, transform, output, key) in [
-                    (
-                        "1",
-                        "Sound",
-                        "STT",
-                        "Text",
-                        self.config.hotkey.record_toggle.as_str(),
-                    ),
-                    (
-                        "2",
-                        "Sound",
-                        "STT → Translate",
-                        "Text",
-                        self.config.hotkey.record_translate_text.as_str(),
-                    ),
-                    (
-                        "3",
-                        "Sound",
-                        "STT → TTS",
-                        "Audio",
-                        self.config.hotkey.record_tts.as_str(),
-                    ),
-                    (
-                        "4",
-                        "Sound",
-                        "STT → Translate → TTS",
-                        "Audio",
-                        self.config.hotkey.record_translate_tts.as_str(),
-                    ),
-                    (
-                        "5",
-                        "Text",
-                        "Translate",
-                        "Text",
-                        self.config.hotkey.translate_text.as_str(),
-                    ),
-                    (
-                        "6",
-                        "Text",
-                        "Translate → TTS",
-                        "Audio",
-                        self.config.hotkey.translate_tts.as_str(),
-                    ),
-                    (
-                        "7",
-                        "Text",
-                        "TTS",
-                        "Audio",
-                        self.config.hotkey.tts_trigger.as_str(),
-                    ),
-                ] {
-                    ui.monospace(route);
-                    ui.label(input);
-                    ui.label(transform);
-                    ui.label(output);
-                    ui.monospace(key);
-                    ui.end_row();
-                }
-            });
-        ui.label(format!(
-            "Switch inbound/outbound route: {}",
-            self.config.hotkey.translate_route_switch
-        ));
-        ui.add_space(10.0);
-
-        ui.label(egui::RichText::new("Independent live caption lanes").strong());
-        ui.horizontal(|ui| {
-            ui.label("Microphone router:");
-            ui.add(
-                egui::TextEdit::singleline(&mut self.config.subtitles.router_url)
-                    .desired_width(330.0),
-            );
-        });
-        ui.horizontal(|ui| {
-            ui.label("Rolling audio window:");
-            ui.add(
-                egui::DragValue::new(&mut self.config.subtitles.chunk_seconds)
-                    .range(0.5..=15.0)
-                    .suffix("s"),
-            );
-            ui.label("Font:");
-            ui.add(egui::DragValue::new(&mut self.config.subtitles.font_size).range(14.0..=72.0));
-            ui.label("Lines:");
-            ui.add(egui::DragValue::new(&mut self.config.subtitles.max_lines).range(1..=10));
-        });
-        ui.horizontal_wrapped(|ui| {
-            Self::spoken_language_combo(
-                ui,
-                "subtitle-microphone-language",
-                "Microphone source",
-                &mut self.config.subtitles.microphone_language,
-            );
-            Self::spoken_language_combo(
-                ui,
-                "subtitle-system-language",
-                "System source",
-                &mut self.config.subtitles.system_language,
-            );
-            ui.label("Translated target:");
-            ui.add(
-                egui::TextEdit::singleline(&mut self.config.subtitles.target_language)
-                    .desired_width(100.0),
-            );
-        });
-        ui.label(egui::RichText::new("The tray exposes microphone and physical system-playback lanes separately. Each can run native-language and translated windows at the same time; every window owns an independent router cursor and visible close/drag controls.").small());
         ui.add_space(10.0);
 
         ui.label("System prompt:");

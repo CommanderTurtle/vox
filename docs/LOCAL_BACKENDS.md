@@ -113,8 +113,9 @@ cargo build --release
 
 Open **Settings** from the Vox tray and save the following choices. Settings
 apply live; Vox rebuilds its lightweight HTTP clients without restarting the
-model servers. As in upstream Vox, edited global-hotkey strings are parsed on
-the next Vox launch; tray/profile/route changes are immediate.
+model servers. Legacy upstream hotkey strings are parsed on the next Vox
+launch. Programmable route hotkeys, tray actions, profiles, and route settings
+reload immediately.
 
 ## CrisperWhisper speech input
 
@@ -313,6 +314,15 @@ Then use the tray's **Live Captions** submenu:
   to the Windows default output. The router clears loopback audio captured
   during playback so the dub cannot recursively transcribe itself.
 
+The **Routes** settings page packages those lanes and one-shot workflows as
+editable presets. Each preset independently owns its input, fixed/detect
+Crisper language, intended/literal mode, translation target, destination, and
+hotkey. First-run defaults cover German system audio → English captions,
+English system and microphone captions, microphone → cloned voice, selected
+text → cloned voice, selected text → English clipboard, and English microphone
+→ Chinese clipboard. Every enabled preset is also available under the tray's
+**Programmable Routes** submenu; clearing its hotkey makes it tray-only.
+
 Every native borderless overlay has a visible drag bar and close button, stays
 always on top, and also closes with Escape. Its rolling-window and per-source
 language settings live in executable-local `config.toml`:
@@ -395,13 +405,14 @@ Dedicated hotkeys select raw versus translated TTS. The normal record and TTS
 hotkeys keep the existing `translate.asr` and `translate.tts` switches for
 users who prefer translation to be their default path.
 
-All seven compositions are first-class desktop actions. In particular,
+All seven compositions remain first-class legacy desktop actions. The
+programmable route matrix adds saved, independently parameterized instances
+without removing them. In particular,
 `Alt+Ctrl+R` is the dedicated speech → active translation route → injected
 text action; it does not depend on the ordinary record hotkey's `translate.asr`
 preference. Translation is always visible in the tray, including on first run,
 where it can be enabled and its active route/target selected. Settings opens on
-the dedicated Translation & flows page instead of burying the backend below
-the ASR and TTS forms.
+the Routes page; translation backend details remain on their own page.
 
 When `model` is blank, Vox selects the first model advertised by the
 configured `/models` route and caches that choice for the process lifetime.

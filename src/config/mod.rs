@@ -24,7 +24,159 @@ pub struct Config {
     pub translate: TranslateConfig,
     #[serde(default)]
     pub subtitles: SubtitleConfig,
+    /// User-programmable end-to-end routes. These complement the legacy
+    /// one-purpose hotkeys and are rendered as a single matrix in Settings
+    /// and the tray menu.
+    #[serde(default = "default_route_presets")]
+    pub route_presets: Vec<RoutePresetConfig>,
     pub general: GeneralConfig,
+}
+
+/// One explicit local workflow. String enums keep the executable-local TOML
+/// approachable while the UI constrains values to the supported matrix.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct RoutePresetConfig {
+    pub id: String,
+    pub name: String,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub hotkey: String,
+    /// microphone | system | selection | clipboard
+    pub input: String,
+    /// Crisper language code; used only for microphone/system inputs.
+    #[serde(default = "default_detect_language")]
+    pub source_language: String,
+    #[serde(default = "default_crisper_mode")]
+    pub transcript_mode: String,
+    #[serde(default)]
+    pub translate: bool,
+    #[serde(default = "default_target_language")]
+    pub target_language: String,
+    /// caption | clipboard | mic_forwarder
+    pub output: String,
+}
+
+impl RoutePresetConfig {
+    pub fn is_audio_input(&self) -> bool {
+        matches!(self.input.as_str(), "microphone" | "system")
+    }
+
+    pub fn is_text_input(&self) -> bool {
+        matches!(self.input.as_str(), "selection" | "clipboard")
+    }
+
+    pub fn summary(&self) -> String {
+        let mut stages = vec![match self.input.as_str() {
+            "microphone" => "Mic".to_string(),
+            "system" => "System".to_string(),
+            "selection" => "Selection".to_string(),
+            "clipboard" => "Clipboard".to_string(),
+            other => other.to_string(),
+        }];
+        if self.is_audio_input() {
+            stages.push(format!("STT ({})", self.source_language));
+        }
+        if self.translate {
+            stages.push(format!("Translate ({})", self.target_language));
+        }
+        stages.push(match self.output.as_str() {
+            "caption" => "Caption".to_string(),
+            "clipboard" => "Clipboard".to_string(),
+            "mic_forwarder" => "TTS → Mic".to_string(),
+            other => other.to_string(),
+        });
+        stages.join(" → ")
+    }
+}
+
+pub fn default_route_presets() -> Vec<RoutePresetConfig> {
+    vec![
+        RoutePresetConfig {
+            id: "system-de-en-caption".into(),
+            name: "German system audio → English captions".into(),
+            enabled: true,
+            hotkey: "Ctrl+Alt+1".into(),
+            input: "system".into(),
+            source_language: "de".into(),
+            transcript_mode: "intended".into(),
+            translate: true,
+            target_language: "English".into(),
+            output: "caption".into(),
+        },
+        RoutePresetConfig {
+            id: "mic-en-tts-mic".into(),
+            name: "English microphone → cloned voice microphone".into(),
+            enabled: true,
+            hotkey: "Ctrl+Alt+2".into(),
+            input: "microphone".into(),
+            source_language: "en".into(),
+            transcript_mode: "intended".into(),
+            translate: false,
+            target_language: "English".into(),
+            output: "mic_forwarder".into(),
+        },
+        RoutePresetConfig {
+            id: "system-en-caption".into(),
+            name: "English system audio → English captions".into(),
+            enabled: true,
+            hotkey: "Ctrl+Alt+3".into(),
+            input: "system".into(),
+            source_language: "en".into(),
+            transcript_mode: "intended".into(),
+            translate: false,
+            target_language: "English".into(),
+            output: "caption".into(),
+        },
+        RoutePresetConfig {
+            id: "text-tts-mic".into(),
+            name: "Selected text → cloned voice microphone".into(),
+            enabled: true,
+            hotkey: "Ctrl+Alt+4".into(),
+            input: "selection".into(),
+            source_language: "detect".into(),
+            transcript_mode: "intended".into(),
+            translate: false,
+            target_language: "English".into(),
+            output: "mic_forwarder".into(),
+        },
+        RoutePresetConfig {
+            id: "text-en-clipboard".into(),
+            name: "Selected text → English clipboard".into(),
+            enabled: true,
+            hotkey: "Ctrl+Alt+5".into(),
+            input: "selection".into(),
+            source_language: "detect".into(),
+            transcript_mode: "intended".into(),
+            translate: true,
+            target_language: "English".into(),
+            output: "clipboard".into(),
+        },
+        RoutePresetConfig {
+            id: "mic-en-caption".into(),
+            name: "English microphone → English captions".into(),
+            enabled: true,
+            hotkey: "Ctrl+Alt+6".into(),
+            input: "microphone".into(),
+            source_language: "en".into(),
+            transcript_mode: "intended".into(),
+            translate: false,
+            target_language: "English".into(),
+            output: "caption".into(),
+        },
+        RoutePresetConfig {
+            id: "mic-en-zh-clipboard".into(),
+            name: "English microphone → Chinese clipboard".into(),
+            enabled: true,
+            hotkey: "Ctrl+Alt+7".into(),
+            input: "microphone".into(),
+            source_language: "en".into(),
+            transcript_mode: "intended".into(),
+            translate: true,
+            target_language: "Chinese".into(),
+            output: "clipboard".into(),
+        },
+    ]
 }
 
 /// Local system-audio caption surface. Audio is supplied by the native
@@ -839,6 +991,9 @@ mod tests {
         assert_eq!(config.tts.primary_engine, "edge-tts");
         assert_eq!(config.tts.edge.voice, "zh-CN-XiaoxiaoNeural");
         assert_eq!(config.asr.whisper_cpp.base_url, "http://127.0.0.1:8080");
+        assert_eq!(config.route_presets.len(), 7);
+        assert_eq!(config.route_presets[0].source_language, "de");
+        assert_eq!(config.route_presets[6].target_language, "Chinese");
     }
 
     #[test]

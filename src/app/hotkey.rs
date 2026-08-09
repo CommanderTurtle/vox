@@ -5,7 +5,7 @@
 
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use rdev::{listen, EventType, Key};
 
@@ -46,6 +46,10 @@ pub enum HotkeyEvent {
     RecordTtsReleased,
     /// Toggle inbound/outbound translation route.
     TranslateRouteSwitch,
+    /// Run a user-programmable route. Press/release are distinct so
+    /// microphone presets retain normal push-to-talk behavior.
+    RoutePresetPressed(usize),
+    RoutePresetReleased(usize),
 }
 
 /// A parsed hotkey binding: combination of modifier keys + a main key.
@@ -168,6 +172,7 @@ pub fn start_hotkey_listener(
     record_translate_text_binding: HotkeyBinding,
     record_tts_binding: HotkeyBinding,
     translate_route_binding: HotkeyBinding,
+    route_bindings: Arc<RwLock<Vec<(usize, HotkeyBinding)>>>,
     sender: crossbeam::channel::Sender<HotkeyEvent>,
     stop_flag: Arc<AtomicBool>,
 ) {
@@ -189,6 +194,7 @@ pub fn start_hotkey_listener(
         let mut record_translate_text_was_pressed = false;
         let mut record_tts_was_pressed = false;
         let mut translate_route_was_pressed = false;
+        let mut route_presets_pressed: HashSet<usize> = HashSet::new();
 
         // rdev's listen() blocks forever; it processes events in callback.
         if let Err(e) = listen(move |event| {
@@ -279,6 +285,18 @@ pub fn start_hotkey_listener(
                         translate_route_was_pressed = true;
                         let _ = sender.send(HotkeyEvent::TranslateRouteSwitch);
                     }
+
+                    // Route bindings are live-reloadable. Clone the small
+                    // parsed list so Settings never blocks the rdev callback.
+                    let current_routes = route_bindings
+                        .read()
+                        .map(|bindings| bindings.clone())
+                        .unwrap_or_default();
+                    for (index, binding) in current_routes {
+                        if binding.matches(&pressed, &key) && route_presets_pressed.insert(index) {
+                            let _ = sender.send(HotkeyEvent::RoutePresetPressed(index));
+                        }
+                    }
                 }
                 EventType::KeyRelease(key) => {
                     pressed.remove(&key);
@@ -336,6 +354,16 @@ pub fn start_hotkey_listener(
                     }
                     if key == translate_route_binding.key {
                         translate_route_was_pressed = false;
+                    }
+
+                    let current_routes = route_bindings
+                        .read()
+                        .map(|bindings| bindings.clone())
+                        .unwrap_or_default();
+                    for (index, binding) in current_routes {
+                        if key == binding.key && route_presets_pressed.remove(&index) {
+                            let _ = sender.send(HotkeyEvent::RoutePresetReleased(index));
+                        }
                     }
                 }
                 _ => {}

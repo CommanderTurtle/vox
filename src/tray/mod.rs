@@ -17,6 +17,7 @@ pub use tray_icon::TrayIcon;
 use tray_icon::{Icon, TrayIconBuilder};
 
 use crate::app::state::AppState;
+use crate::config::RoutePresetConfig;
 
 /// Events emitted by the tray (user interactions).
 #[derive(Debug, Clone)]
@@ -43,6 +44,7 @@ pub enum TrayEvent {
         translate: bool,
         dub: bool,
     },
+    RunRoutePreset(usize),
     /// "ptt" | "toggle"
     SetRecordMode(String),
 }
@@ -80,6 +82,7 @@ pub struct MenuModel {
     pub translate_route: String,
     pub translate_target: String,
     pub crisper_mode: String,
+    pub route_presets: Vec<RoutePresetConfig>,
     /// "ptt" | "toggle"
     pub record_mode: String,
     pub app_state: AppState,
@@ -410,6 +413,22 @@ fn build_menu(m: &MenuModel) -> Menu {
     let _ = subtitles_menu.append(&system_menu);
     let _ = menu.append(&subtitles_menu);
 
+    let routes_menu = Submenu::new("Programmable Routes", true);
+    for (index, preset) in m.route_presets.iter().enumerate() {
+        let suffix = if preset.hotkey.trim().is_empty() {
+            "tray only".to_string()
+        } else {
+            preset.hotkey.clone()
+        };
+        let _ = routes_menu.append(&MenuItem::with_id(
+            format!("route-preset:{index}"),
+            format!("{}  [{}]", preset.name, suffix),
+            preset.enabled,
+            None,
+        ));
+    }
+    let _ = menu.append(&routes_menu);
+
     let _ = menu.append(&PredefinedMenuItem::separator());
 
     // ── Actions ────────────────────────────────────────────────────────
@@ -536,6 +555,18 @@ fn map_event(id: &str, model: &MenuModel) -> Option<TrayEvent> {
     if let Some(mode) = id.strip_prefix("recordmode:") {
         if mode == "ptt" || mode == "toggle" {
             return Some(TrayEvent::SetRecordMode(mode.to_string()));
+        }
+    }
+    if let Some(index) = id
+        .strip_prefix("route-preset:")
+        .and_then(|value| value.parse::<usize>().ok())
+    {
+        if model
+            .route_presets
+            .get(index)
+            .is_some_and(|preset| preset.enabled)
+        {
+            return Some(TrayEvent::RunRoutePreset(index));
         }
     }
     None

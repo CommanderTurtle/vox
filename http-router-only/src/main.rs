@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     net::{IpAddr, Ipv6Addr, SocketAddr},
     path::{Path, PathBuf},
     sync::{Arc, RwLock},
@@ -7,7 +8,7 @@ use std::{
 
 use axum::{
     body::Body,
-    extract::{Multipart, State},
+    extract::{Multipart, Path as AxumPath, State},
     http::{header, HeaderMap, HeaderValue, StatusCode},
     response::{IntoResponse, Response},
     routing::{get, post},
@@ -158,7 +159,7 @@ struct VoiceConfig {
 struct AppState {
     config: Arc<Config>,
     client: Client,
-    subtitle_stream: Arc<RwLock<Option<SubtitleStreamControl>>>,
+    subtitle_streams: Arc<RwLock<HashMap<String, SubtitleStreamControl>>>,
 }
 
 #[derive(Clone)]
@@ -264,10 +265,15 @@ struct SystemAudioRequest {
     voice: Option<String>,
     seed: Option<u64>,
     output: Option<String>,
+    /// Internal non-destructive router cursor. HTTP callers select the
+    /// public stream id in the URL instead.
+    #[serde(skip)]
+    consumer: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
 struct SubtitleStreamSnapshot {
+    id: String,
     source: String,
     running: bool,
     processing: bool,
@@ -318,7 +324,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         client: Client::builder()
             .timeout(Duration::from_secs(1800))
             .build()?,
-        subtitle_stream: Arc::new(RwLock::new(None)),
+        subtitle_streams: Arc::new(RwLock::new(HashMap::new())),
     };
 
     let app = Router::new()
@@ -347,6 +353,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             get(system_audio_stream_status)
                 .post(system_audio_stream_start)
                 .delete(system_audio_stream_stop),
+        )
+        .route("/v1/captions", get(caption_stream_list))
+        .route(
+            "/v1/captions/{id}",
+            get(caption_stream_status)
+                .post(caption_stream_start)
+                .delete(caption_stream_stop),
         )
         .layer(cors)
         .layer(TraceLayer::new_for_http())
@@ -413,7 +426,13 @@ async fn routes(State(state): State<AppState>) -> Json<Value> {
             "outputs": ["playback", "mic", "wav"],
             "live_audio_sources": ["microphone", "system"],
             "live_audio_actions": ["transcribe", "translate", "dub"],
-            "streaming": "cached start/status/stop; polls never repeat inference"
+            "streaming": "named concurrent caption streams; polls never repeat inference",
+            "caption_endpoints": {
+                "list": "GET /v1/captions",
+                "start": "POST /v1/captions/{id}",
+                "status": "GET /v1/captions/{id}",
+                "stop": "DELETE /v1/captions/{id}"
+            }
         },
         "common_targets": ["English", "Spanish", "French", "German", "Italian", "Portuguese", "Japanese", "Korean", "Mandarin Chinese", "Arabic", "Hindi"]
     }))
@@ -702,7 +721,85 @@ async fn system_audio_stream_start(
     headers: HeaderMap,
     Json(request): Json<SystemAudioRequest>,
 ) -> Result<Json<SubtitleStreamSnapshot>, ApiError> {
+    start_caption_stream(state, headers, "default".into(), request).await
+}
+
+async fn system_audio_stream_status(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<SubtitleStreamSnapshot>, ApiError> {
+    caption_stream_status_inner(state, headers, "default".into()).await
+}
+
+async fn system_audio_stream_stop(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<SubtitleStreamSnapshot>, ApiError> {
+    stop_caption_stream(state, headers, "default".into()).await
+}
+
+async fn caption_stream_start(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<String>,
+    headers: HeaderMap,
+    Json(request): Json<SystemAudioRequest>,
+) -> Result<Json<SubtitleStreamSnapshot>, ApiError> {
+    start_caption_stream(state, headers, id, request).await
+}
+
+async fn caption_stream_status(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<String>,
+    headers: HeaderMap,
+) -> Result<Json<SubtitleStreamSnapshot>, ApiError> {
+    caption_stream_status_inner(state, headers, id).await
+}
+
+async fn caption_stream_stop(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<String>,
+    headers: HeaderMap,
+) -> Result<Json<SubtitleStreamSnapshot>, ApiError> {
+    stop_caption_stream(state, headers, id).await
+}
+
+async fn caption_stream_list(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, ApiError> {
     authorize(&state, &headers)?;
+    let controls: Vec<_> = state
+        .subtitle_streams
+        .read()
+        .map_err(|_| ApiError::Internal("subtitle stream map was poisoned".into()))?
+        .values()
+        .cloned()
+        .collect();
+    let mut streams = Vec::with_capacity(controls.len());
+    for control in controls {
+        streams.push(
+            serde_json::to_value(
+                control
+                    .snapshot
+                    .read()
+                    .map_err(|_| ApiError::Internal("subtitle snapshot was poisoned".into()))?
+                    .clone(),
+            )
+            .map_err(|error| ApiError::Internal(error.to_string()))?,
+        );
+    }
+    Ok(Json(json!({"streams": streams})))
+}
+
+async fn start_caption_stream(
+    state: AppState,
+    headers: HeaderMap,
+    id: String,
+    mut request: SystemAudioRequest,
+) -> Result<Json<SubtitleStreamSnapshot>, ApiError> {
+    authorize(&state, &headers)?;
+    validate_caption_id(&id)?;
+    request.consumer = Some(format!("http-caption-{id}"));
     let mode = normalized_mode(
         request
             .mode
@@ -711,6 +808,7 @@ async fn system_audio_stream_start(
     )
     .to_string();
     let snapshot = Arc::new(RwLock::new(SubtitleStreamSnapshot {
+        id: id.clone(),
         source: capture_source(&request)?.to_string(),
         running: true,
         processing: false,
@@ -732,10 +830,10 @@ async fn system_audio_stream_start(
         snapshot: snapshot.clone(),
     };
     let previous = state
-        .subtitle_stream
+        .subtitle_streams
         .write()
-        .map_err(|_| ApiError::Internal("subtitle stream lock was poisoned".into()))?
-        .replace(control);
+        .map_err(|_| ApiError::Internal("subtitle stream map was poisoned".into()))?
+        .insert(id, control);
     if let Some(previous) = previous {
         previous.abort.abort();
     }
@@ -746,16 +844,19 @@ async fn system_audio_stream_start(
     Ok(Json(value))
 }
 
-async fn system_audio_stream_status(
-    State(state): State<AppState>,
+async fn caption_stream_status_inner(
+    state: AppState,
     headers: HeaderMap,
+    id: String,
 ) -> Result<Json<SubtitleStreamSnapshot>, ApiError> {
     authorize(&state, &headers)?;
+    validate_caption_id(&id)?;
     let control = state
-        .subtitle_stream
+        .subtitle_streams
         .read()
-        .map_err(|_| ApiError::Internal("subtitle stream lock was poisoned".into()))?
-        .clone();
+        .map_err(|_| ApiError::Internal("subtitle stream map was poisoned".into()))?
+        .get(&id)
+        .cloned();
     let snapshot = match control {
         Some(control) => control
             .snapshot
@@ -763,6 +864,7 @@ async fn system_audio_stream_status(
             .map_err(|_| ApiError::Internal("subtitle snapshot lock was poisoned".into()))?
             .clone(),
         None => SubtitleStreamSnapshot {
+            id,
             source: "system".into(),
             running: false,
             processing: false,
@@ -778,18 +880,21 @@ async fn system_audio_stream_status(
     Ok(Json(snapshot))
 }
 
-async fn system_audio_stream_stop(
-    State(state): State<AppState>,
+async fn stop_caption_stream(
+    state: AppState,
     headers: HeaderMap,
+    id: String,
 ) -> Result<Json<SubtitleStreamSnapshot>, ApiError> {
     authorize(&state, &headers)?;
+    validate_caption_id(&id)?;
     let control = state
-        .subtitle_stream
+        .subtitle_streams
         .read()
-        .map_err(|_| ApiError::Internal("subtitle stream lock was poisoned".into()))?
-        .clone();
+        .map_err(|_| ApiError::Internal("subtitle stream map was poisoned".into()))?
+        .get(&id)
+        .cloned();
     let Some(control) = control else {
-        return system_audio_stream_status(State(state), headers).await;
+        return caption_stream_status_inner(state, headers, id).await;
     };
     control.abort.abort();
     let value = {
@@ -803,6 +908,20 @@ async fn system_audio_stream_stop(
         snapshot.clone()
     };
     Ok(Json(value))
+}
+
+fn validate_caption_id(id: &str) -> Result<(), ApiError> {
+    if id.is_empty()
+        || id.len() > 64
+        || !id
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_'))
+    {
+        return Err(ApiError::BadRequest(
+            "caption id must contain 1-64 ASCII letters, numbers, '-' or '_'".into(),
+        ));
+    }
+    Ok(())
 }
 
 async fn run_system_audio_stream(
@@ -894,10 +1013,12 @@ async fn take_router_audio(
 ) -> Result<AudioInput, ApiError> {
     let source = capture_source(request)?;
     let seconds = request.seconds.unwrap_or(1.5).clamp(0.5, 15.0);
+    let default_consumer = format!("http-{source}");
+    let consumer = request.consumer.as_deref().unwrap_or(&default_consumer);
     let response = state
         .client
         .get(format!(
-            "{}/v1/audio/take?source={source}&min_seconds={seconds}&latest_seconds={seconds}&consumer=http-{source}",
+            "{}/v1/audio/take?source={source}&min_seconds={seconds}&latest_seconds={seconds}&consumer={consumer}",
             state.config.backends.router_url.trim_end_matches('/')
         ))
         .send()
@@ -1478,5 +1599,13 @@ mod tests {
         let config = LongCatConfig::default();
         assert!(config.concatenate_chunks);
         assert_eq!(config.characters_per_request, 240);
+    }
+
+    #[test]
+    fn caption_ids_are_safe_router_consumers() {
+        assert!(validate_caption_id("german-to-english_1").is_ok());
+        assert!(validate_caption_id("").is_err());
+        assert!(validate_caption_id("has spaces").is_err());
+        assert!(validate_caption_id("../shared").is_err());
     }
 }

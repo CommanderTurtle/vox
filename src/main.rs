@@ -14,13 +14,13 @@ mod tray;
 mod tts;
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use crossbeam::channel;
 
 use app::hotkey::{start_hotkey_listener, HotkeyBinding, HotkeyEvent};
 use app::state::{AppState, RecordMode};
-use asr::AsrManager;
+use asr::{AsrEngine, AsrManager};
 use audio::capture::AudioCapture;
 use audio::utils::{pcm_to_wav, resample_linear};
 use config::ConfigManager;
@@ -50,6 +50,7 @@ enum RecordingDestination {
     TranslateAndInject,
     Speak,
     TranslateAndSpeak,
+    Preset(usize),
 }
 
 /// Shared application state.
@@ -73,6 +74,9 @@ struct AppCtx {
     asr_result_tx: channel::Sender<AsrResult>,
     /// Settings window sends the edited config snapshot here on save.
     settings_save_tx: channel::Sender<config::Config>,
+    /// Route-only bindings are mutable so the programmable matrix updates
+    /// live when Settings is saved.
+    route_bindings: Arc<RwLock<Vec<(usize, HotkeyBinding)>>>,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -110,6 +114,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     source,
                     dub || args[2..].iter().any(|arg| arg == "--translate"),
                     dub,
+                    cli_arg_value(&args[2..], "--source-language"),
+                    cli_arg_value(&args[2..], "--target-language"),
+                    cli_arg_value(&args[2..], "--transcript-mode"),
+                    cli_arg_value(&args[2..], "--name"),
                 );
             }
             _ => {}
@@ -145,6 +153,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         record_translate_text_binding,
         record_tts_binding,
         translate_route_binding,
+        route_bindings,
     ) = {
         let cfg = config_mgr.read();
         let record = HotkeyBinding::parse(&cfg.hotkey.record_toggle)
@@ -177,6 +186,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             HotkeyBinding::parse(&cfg.hotkey.record_tts).expect("Invalid record_tts hotkey config");
         let translate_route = HotkeyBinding::parse(&cfg.hotkey.translate_route_switch)
             .expect("Invalid translate_route_switch hotkey config");
+        let route_bindings = parse_route_bindings(&cfg.route_presets);
         (
             record,
             engine,
@@ -191,6 +201,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             record_translate_text,
             record_tts,
             translate_route,
+            route_bindings,
         )
     };
 
@@ -230,6 +241,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         translate_route,
         translate_target,
         crisper_mode,
+        route_presets: config_mgr.read().route_presets.clone(),
         record_mode: record_mode.as_str().to_string(),
         app_state: AppState::Idle,
     };
@@ -238,6 +250,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // ── Start global hotkey listener ──────────────────────────────────────
     let (hotkey_sender, hotkey_receiver) = channel::unbounded::<HotkeyEvent>();
     let stop_flag = Arc::new(AtomicBool::new(false));
+    let route_bindings = Arc::new(RwLock::new(route_bindings));
 
     start_hotkey_listener(
         record_binding,
@@ -253,6 +266,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         record_translate_text_binding,
         record_tts_binding,
         translate_route_binding,
+        route_bindings.clone(),
         hotkey_sender.clone(),
         stop_flag.clone(),
     );
@@ -284,6 +298,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         runtime,
         asr_result_tx,
         settings_save_tx,
+        route_bindings,
     };
 
     // ── Main event loop (NO Windows message pump needed here) ────────────
@@ -342,6 +357,7 @@ fn build_menu_model(ctx: &AppCtx, app_state: AppState) -> MenuModel {
         translate_route,
         translate_target,
         crisper_mode,
+        route_presets: ctx.config_mgr.read().route_presets.clone(),
         record_mode: ctx.record_mode.as_str().to_string(),
         app_state,
     }
@@ -524,10 +540,11 @@ fn handle_tray_event(
             translate,
             dub,
         }) => {
-            if let Err(error) = launch_subtitles(&source, translate, dub) {
+            if let Err(error) = launch_subtitles(&source, translate, dub, None, None, None, None) {
                 log::error!("Could not launch subtitles: {}", error);
             }
         }
+        Ok(TrayEvent::RunRoutePreset(index)) => run_route_preset_from_menu(ctx, index),
         Ok(TrayEvent::SetRecordMode(mode)) => {
             log::info!("Switching record mode to: {}", mode);
             ctx.record_mode = RecordMode::from_str(&mode);
@@ -545,13 +562,31 @@ fn handle_tray_event(
     true
 }
 
-fn launch_subtitles(source: &str, translate: bool, dub: bool) -> std::io::Result<()> {
+fn launch_subtitles(
+    source: &str,
+    translate: bool,
+    dub: bool,
+    source_language: Option<&str>,
+    target_language: Option<&str>,
+    transcript_mode: Option<&str>,
+    name: Option<&str>,
+) -> std::io::Result<()> {
     let mut command = std::process::Command::new(std::env::current_exe()?);
     command.args(["subtitles", "--source", source]);
     if dub {
         command.arg("--dub");
     } else if translate {
         command.arg("--translate");
+    }
+    for (flag, value) in [
+        ("--source-language", source_language),
+        ("--target-language", target_language),
+        ("--transcript-mode", transcript_mode),
+        ("--name", name),
+    ] {
+        if let Some(value) = value.filter(|value| !value.trim().is_empty()) {
+            command.args([flag, value]);
+        }
     }
     #[cfg(windows)]
     {
@@ -737,7 +772,161 @@ fn handle_hotkey_event(ctx: &mut AppCtx, event: HotkeyEvent) {
             log::info!("[Hotkey] Translation route: {}", route);
             push_tray(ctx, AppState::Idle);
         }
+        HotkeyEvent::RoutePresetPressed(index) => {
+            log::info!("[Hotkey] Route preset {} pressed", index + 1);
+            run_route_preset_pressed(ctx, index);
+        }
+        HotkeyEvent::RoutePresetReleased(index) => {
+            if ctx.record_mode == RecordMode::PushToTalk
+                && ctx.recording_destination == RecordingDestination::Preset(index)
+            {
+                stop_recording(ctx);
+            }
+        }
     }
+}
+
+fn cli_arg_value<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
+    args.windows(2)
+        .find(|pair| pair[0] == flag)
+        .map(|pair| pair[1].as_str())
+}
+
+fn parse_route_bindings(presets: &[config::RoutePresetConfig]) -> Vec<(usize, HotkeyBinding)> {
+    presets
+        .iter()
+        .enumerate()
+        .filter_map(|(index, preset)| {
+            if !preset.enabled || preset.hotkey.trim().is_empty() {
+                return None;
+            }
+            match HotkeyBinding::parse(&preset.hotkey) {
+                Some(binding) => Some((index, binding)),
+                None => {
+                    log::warn!(
+                        "Route preset '{}' has invalid hotkey '{}'; tray action remains available",
+                        preset.name,
+                        preset.hotkey
+                    );
+                    None
+                }
+            }
+        })
+        .collect()
+}
+
+fn route_preset(ctx: &AppCtx, index: usize) -> Option<config::RoutePresetConfig> {
+    ctx.config_mgr.read().route_presets.get(index).cloned()
+}
+
+fn run_route_preset_pressed(ctx: &mut AppCtx, index: usize) {
+    let Some(preset) = route_preset(ctx, index) else {
+        log::warn!("Route preset {} no longer exists", index + 1);
+        return;
+    };
+    if !preset.enabled {
+        return;
+    }
+    if preset.output == "caption" && preset.is_audio_input() {
+        if let Err(error) = launch_subtitles(
+            &preset.input,
+            preset.translate,
+            false,
+            Some(&preset.source_language),
+            Some(&preset.target_language),
+            Some(&preset.transcript_mode),
+            Some(&preset.name),
+        ) {
+            log::error!("Could not launch route '{}': {}", preset.name, error);
+        }
+    } else if preset.input == "microphone" {
+        if preset.translate && !ctx.translator.is_enabled() {
+            log::warn!("Route '{}' needs the local translator enabled", preset.name);
+            return;
+        }
+        match ctx.record_mode {
+            RecordMode::PushToTalk => start_recording_for(ctx, RecordingDestination::Preset(index)),
+            RecordMode::Toggle => {
+                if ctx.capture.is_some() {
+                    stop_recording(ctx);
+                } else {
+                    start_recording_for(ctx, RecordingDestination::Preset(index));
+                }
+            }
+        }
+    } else if preset.is_text_input() {
+        trigger_text_preset(ctx, index, preset);
+    } else {
+        log::warn!(
+            "Route '{}' is invalid: system audio currently requires caption output",
+            preset.name
+        );
+    }
+}
+
+fn run_route_preset_from_menu(ctx: &mut AppCtx, index: usize) {
+    let Some(preset) = route_preset(ctx, index) else {
+        return;
+    };
+    // A tray click cannot be held, so microphone action routes use an
+    // explicit start/stop toggle regardless of the global PTT preference.
+    if preset.input == "microphone" && preset.output != "caption" {
+        if ctx.capture.is_some() {
+            stop_recording(ctx);
+        } else if !preset.translate || ctx.translator.is_enabled() {
+            start_recording_for(ctx, RecordingDestination::Preset(index));
+        } else {
+            log::warn!("Route '{}' needs the local translator enabled", preset.name);
+        }
+    } else {
+        run_route_preset_pressed(ctx, index);
+    }
+}
+
+fn trigger_text_preset(ctx: &mut AppCtx, index: usize, preset: config::RoutePresetConfig) {
+    if preset.translate && !ctx.translator.is_enabled() {
+        log::warn!("Route '{}' needs the local translator enabled", preset.name);
+        return;
+    }
+    let mode = if preset.input == "clipboard" {
+        TtsInputMode::Clipboard
+    } else {
+        TtsInputMode::Selection
+    };
+    let Some(text) = read_tts_text(mode) else {
+        return;
+    };
+    push_tray(ctx, AppState::Transcribing);
+    let translator = ctx.translator.clone();
+    let result_tx = ctx.asr_result_tx.clone();
+    ctx.runtime.spawn(async move {
+        let text = if preset.translate {
+            match translator
+                .translate_with(&text, "auto", &preset.target_language)
+                .await
+            {
+                Ok(translated) => translated,
+                Err(error) => {
+                    log::error!("Route '{}' translation failed: {}", preset.name, error);
+                    let _ = result_tx.send(AsrResult::Completed);
+                    return;
+                }
+            }
+        } else {
+            text
+        };
+        let _ = result_tx.send(AsrResult::Text {
+            text,
+            destination: RecordingDestination::Preset(index),
+        });
+    });
+}
+
+fn copy_text_to_clipboard(text: &str) -> Result<(), String> {
+    let mut clipboard = arboard::Clipboard::new().map_err(|error| error.to_string())?;
+    clipboard
+        .set_text(text.to_string())
+        .map_err(|error| error.to_string())
 }
 
 /// Trigger TTS: read text and speak it.
@@ -788,6 +977,10 @@ fn read_tts_text(mode: TtsInputMode) -> Option<String> {
 }
 
 fn speak_text(ctx: &AppCtx, text: String, translate: bool) {
+    speak_text_with_output(ctx, text, translate, None);
+}
+
+fn speak_text_with_output(ctx: &AppCtx, text: String, translate: bool, output_mode: Option<&str>) {
     log::info!(
         "TTS synthesizing with engine '{}': {} chars",
         ctx.tts_mgr.active_engine(),
@@ -800,7 +993,10 @@ fn speak_text(ctx: &AppCtx, text: String, translate: bool) {
     let translator = ctx.translator.clone();
     let active = ctx.tts_mgr.active_engine();
     let fmt = ctx.tts_mgr.output_format();
-    let output = ctx.config_mgr.read().tts.output.clone();
+    let mut output = ctx.config_mgr.read().tts.output.clone();
+    if let Some(mode) = output_mode {
+        output.mode = mode.to_string();
+    }
     ctx.runtime.spawn(async move {
         let text = if translate {
             match translator.translate(&text).await {
@@ -946,8 +1142,22 @@ fn stop_recording(ctx: &mut AppCtx) {
     let asr_ref = ctx.asr_mgr.clone();
     let translator = ctx.translator.clone();
     let asr_result_tx = ctx.asr_result_tx.clone();
+    let config = ctx.config_mgr.read().clone();
+    let preset = match destination {
+        RecordingDestination::Preset(index) => config.route_presets.get(index).cloned(),
+        _ => None,
+    };
     ctx.runtime.spawn(async move {
-        let result = asr_ref.transcribe_tagged(&wav_bytes).await;
+        let result = if let Some(preset) = &preset {
+            let mut crisper = config.asr.crisper.clone();
+            crisper.language = preset.source_language.clone();
+            crisper.mode = preset.transcript_mode.clone();
+            asr::crisper_whisper::CrisperWhisperEngine::new(&crisper)
+                .transcribe_tagged(&wav_bytes)
+                .await
+        } else {
+            asr_ref.transcribe_tagged(&wav_bytes).await
+        };
         match result {
             Ok(output) => {
                 let asr::AsrOutput { text, language } = output;
@@ -964,12 +1174,25 @@ fn stop_recording(ctx: &mut AppCtx) {
                     RecordingDestination::TranslateAndInject => true,
                     RecordingDestination::Speak => false,
                     RecordingDestination::TranslateAndSpeak => true,
+                    RecordingDestination::Preset(_) => {
+                        preset.as_ref().is_some_and(|preset| preset.translate)
+                    }
                 };
                 let text = if must_translate {
-                    match translator
-                        .translate_tagged(&text, language.as_deref())
-                        .await
-                    {
+                    let translation = if let Some(preset) = &preset {
+                        translator
+                            .translate_with(
+                                &text,
+                                language.as_deref().unwrap_or("auto"),
+                                &preset.target_language,
+                            )
+                            .await
+                    } else {
+                        translator
+                            .translate_tagged(&text, language.as_deref())
+                            .await
+                    };
+                    match translation {
                         Ok(translated) => translated,
                         Err(error) => {
                             log::warn!(
@@ -1017,6 +1240,33 @@ fn handle_asr_result(ctx: &mut AppCtx, result: AsrResult) {
             }
             RecordingDestination::TranslateAndSpeak => speak_text(ctx, text, false),
             RecordingDestination::Speak => speak_text(ctx, text, false),
+            RecordingDestination::Preset(index) => {
+                if let Some(preset) = route_preset(ctx, index) {
+                    match preset.output.as_str() {
+                        "clipboard" => {
+                            if let Err(error) = copy_text_to_clipboard(&text) {
+                                log::error!(
+                                    "Route '{}' clipboard output failed: {}",
+                                    preset.name,
+                                    error
+                                );
+                            } else {
+                                log::info!("Route '{}' copied {} chars", preset.name, text.len());
+                            }
+                        }
+                        "mic_forwarder" => {
+                            speak_text_with_output(ctx, text, false, Some("mic_forwarder"));
+                        }
+                        other => log::warn!(
+                            "Route '{}' produced unsupported one-shot output '{}'",
+                            preset.name,
+                            other
+                        ),
+                    }
+                } else {
+                    log::warn!("Completed route preset {} no longer exists", index + 1);
+                }
+            }
         },
         AsrResult::Failed(msg) => {
             log::error!("ASR failed: {}", msg);
@@ -1048,6 +1298,10 @@ fn apply_settings(ctx: &mut AppCtx, new_cfg: config::Config) {
     inject::set_copy_only(ctx.config_mgr.read().inject.copy_only);
     ctx.tts_input_mode = TtsInputMode::from_config(&ctx.config_mgr.read());
     ctx.record_mode = RecordMode::from_str(&ctx.config_mgr.read().general.record_mode);
+    let parsed_routes = parse_route_bindings(&ctx.config_mgr.read().route_presets);
+    if let Ok(mut bindings) = ctx.route_bindings.write() {
+        *bindings = parsed_routes;
+    }
 
     push_tray(ctx, AppState::Idle);
     log::info!(

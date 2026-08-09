@@ -63,10 +63,12 @@ remain deliberately local to this member.
 | `POST /v1/audio/dub` | Microphone or system audio through STT, translation, LongCat, then playback/mic/WAV |
 | `POST /v1/audio/clear` | Explicitly discard one source's router buffer |
 | `GET/POST/DELETE /v1/audio/stream` | Cached start/status/stop worker for either source |
+| `GET /v1/captions` | List cached snapshots for every named caption stream |
+| `POST/GET/DELETE /v1/captions/{id}` | Start, poll, or stop one named caption stream without replacing another |
 | `POST /v1/system-audio/transcribe` | Bounded latest system-audio window through STT and optional translation |
 | `POST /v1/system-audio/dub` | System audio through STT, translation, LongCat, then playback/mic/WAV |
 | `POST /v1/system-audio/clear` | Explicitly discard the router loopback buffer |
-| `POST /v1/system-audio/stream` | Start/replace one background caption worker |
+| `POST /v1/system-audio/stream` | Start/replace the backward-compatible `default` caption worker |
 | `GET /v1/system-audio/stream` | Immediate cached status; preserves prior text while the next chunk runs |
 | `DELETE /v1/system-audio/stream` | Stop the worker while retaining its final cached snapshot |
 
@@ -165,15 +167,20 @@ clients of the one router on `8182`. Desktop and HTTP subtitle consumers have
 independent cursors rather than competing for a destructive queue. The router clears system-loopback audio
 after default-device playback so a dub cannot feed back into itself.
 
-For high-frequency lightweight clients, start the inference worker once and
-poll its cached state independently:
+For high-frequency lightweight clients, start named inference workers once
+and poll their cached states independently. Each ID owns a distinct router
+cursor, so Vox desktop and any number of HTTP caption variants can coexist:
 
 ```bash
-curl -X POST http://alien.local:8180/v1/system-audio/stream \
+curl -X POST http://alien.local:8180/v1/captions/german-en \
   -H 'Content-Type: application/json' \
-  -d '{"seconds":1.5,"translate":true,"route":"inbound"}'
-curl http://alien.local:8180/v1/system-audio/stream
-curl -X DELETE http://alien.local:8180/v1/system-audio/stream
+  -d '{"source":"system","seconds":1.5,"language":"de","translate":true,"target_language":"English"}'
+curl -X POST http://alien.local:8180/v1/captions/english-native \
+  -H 'Content-Type: application/json' \
+  -d '{"source":"system","seconds":1.5,"language":"en","translate":false}'
+curl http://alien.local:8180/v1/captions
+curl http://alien.local:8180/v1/captions/german-en
+curl -X DELETE http://alien.local:8180/v1/captions/german-en
 ```
 
 Every GET is only a lock-protected memory read. It never starts inference,

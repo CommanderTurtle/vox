@@ -62,6 +62,13 @@ captures it.
 The router window shows physical-input and injected-audio activity. Vox can
 play TTS to speakers, publish a pasteable WAV, or hoist it into the router.
 
+Open **Settings → Routes** to edit the seven ready-made workflows. Every row
+has its own input, Crisper language, optional translation target, output, and
+hotkey; changes apply immediately after Save. The same routes also appear
+under the tray's **Programmable Routes** menu. Caption rows are concurrent,
+so German→English system captions can stay open beside native English system
+captions and microphone captions.
+
 ## Language behavior
 
 - Choose a known Crisper language for the fastest path: one full transcription.

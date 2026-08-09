@@ -33,6 +33,7 @@
 - 🎭 **Named LongCat Voices** — save any number of `.wav`/`.mp3`/`.m4a` + verbatim `.txt` pairs and switch them from the tray or a hotkey
 - 🎚️ **Native Mic Router** — mix multiple Windows input devices with generated speech and send the result to a selectable virtual-microphone endpoint
 - 💬 **Independent Live Captions** — caption the physical microphone mix and native system playback simultaneously, with optional local translation and dubbing
+- 🧩 **Programmable Route Matrix** — save independent input → STT → translate → TTS/text/caption workflows with live-reloadable hotkeys and tray actions
 - 🪶 **Minimal Footprint** — Pure system tray icon, no main window, zero CPU when idle
 - 🌍 **Global Hotkeys** — Fully customizable keybindings for all actions
 - 💻 **Cross-Platform** — Windows, macOS and Linux
@@ -178,6 +179,15 @@ tray menu or Settings):
 
 All keybindings are configurable in `config.toml`; edited chords take effect
 the next time Vox starts.
+
+The **Routes** page adds live-reloadable workflow hotkeys on top of those
+legacy actions. Each preset independently selects microphone/system/selected
+text/clipboard input, a Crisper language, optional translation target, and
+caption/clipboard/microphone output. The seven first-run presets use
+`Ctrl+Alt+1` through `Ctrl+Alt+7`; clear a chord to keep that action tray-only.
+Caption presets launch independent processes and non-destructive router
+cursors, so multiple translated and untranslated windows may remain active
+at the same time—even from the same source device.
 
 Settings exposes two independent global clipboard switches:
 
