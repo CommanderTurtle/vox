@@ -101,7 +101,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             "subtitles" => {
                 let dub = args[2..].iter().any(|arg| arg == "--dub");
+                let source = args[2..]
+                    .windows(2)
+                    .find(|pair| pair[0] == "--source")
+                    .map(|pair| pair[1].as_str())
+                    .unwrap_or("system");
                 return subtitles::run(
+                    source,
                     dub || args[2..].iter().any(|arg| arg == "--translate"),
                     dub,
                 );
@@ -513,14 +519,13 @@ fn handle_tray_event(
             ctx.asr_mgr = Arc::new(build_asr_manager(&ctx.config_mgr));
             push_tray(ctx, AppState::Idle);
         }
-        Ok(TrayEvent::StartSubtitles(translate)) => {
-            if let Err(error) = launch_subtitles(translate, false) {
+        Ok(TrayEvent::StartSubtitles {
+            source,
+            translate,
+            dub,
+        }) => {
+            if let Err(error) = launch_subtitles(&source, translate, dub) {
                 log::error!("Could not launch subtitles: {}", error);
-            }
-        }
-        Ok(TrayEvent::StartDubbing) => {
-            if let Err(error) = launch_subtitles(true, true) {
-                log::error!("Could not launch live dubbing: {}", error);
             }
         }
         Ok(TrayEvent::SetRecordMode(mode)) => {
@@ -540,9 +545,9 @@ fn handle_tray_event(
     true
 }
 
-fn launch_subtitles(translate: bool, dub: bool) -> std::io::Result<()> {
+fn launch_subtitles(source: &str, translate: bool, dub: bool) -> std::io::Result<()> {
     let mut command = std::process::Command::new(std::env::current_exe()?);
-    command.arg("subtitles");
+    command.args(["subtitles", "--source", source]);
     if dub {
         command.arg("--dub");
     } else if translate {
@@ -1243,22 +1248,30 @@ fn build_asr_manager(config_mgr: &ConfigManager) -> AsrManager {
         }
     }
 
-    // OpenAI-compatible endpoint — registered unconditionally so it can be
-    // pointed at a local server (base_url). Without an api_key it will only
-    // work against auth-less local servers.
+    // OpenAI-compatible endpoint. A blank key is valid only for an explicitly
+    // local service; never register the public OpenAI default without auth.
+    // That keeps a local-only profile from making a noisy cloud fallback.
     {
         let cfg = config_mgr.read();
         let openai_cfg = &cfg.asr.openai;
-        log::info!(
-            "Registering OpenAI-compatible ASR engine at {} (model {})",
-            openai_cfg.base_url,
-            openai_cfg.model
-        );
-        asr_mgr.register(Box::new(OpenaiAsrEngine::new(
-            &openai_cfg.base_url,
-            &openai_cfg.api_key,
-            &openai_cfg.model,
-        )));
+        let url = openai_cfg.base_url.to_ascii_lowercase();
+        let local = url.starts_with("http://127.0.0.1")
+            || url.starts_with("http://localhost")
+            || url.starts_with("http://[::1]");
+        if !openai_cfg.api_key.trim().is_empty() || local {
+            log::info!(
+                "Registering OpenAI-compatible ASR engine at {} (model {})",
+                openai_cfg.base_url,
+                openai_cfg.model
+            );
+            asr_mgr.register(Box::new(OpenaiAsrEngine::new(
+                &openai_cfg.base_url,
+                &openai_cfg.api_key,
+                &openai_cfg.model,
+            )));
+        } else {
+            log::info!("OpenAI-compatible ASR skipped: no local endpoint or API key");
+        }
     }
 
     {

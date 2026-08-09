@@ -38,8 +38,11 @@ pub enum TrayEvent {
     SetTranslateRoute(String),
     SetTranslateTarget(String),
     SetCrisperMode(String),
-    StartSubtitles(bool),
-    StartDubbing,
+    StartSubtitles {
+        source: String,
+        translate: bool,
+        dub: bool,
+    },
     /// "ptt" | "toggle"
     SetRecordMode(String),
 }
@@ -105,9 +108,11 @@ const ID_RESTORE_CLIPBOARD: &str = "restore-clipboard";
 const ID_COPY_ONLY: &str = "copy-only";
 const ID_LONGCAT_SEED_DECREMENT: &str = "longcat-seed-decrement";
 const ID_LONGCAT_SEED_INCREMENT: &str = "longcat-seed-increment";
-const ID_SUBTITLES_NATIVE: &str = "subtitles-native";
-const ID_SUBTITLES_ENGLISH: &str = "subtitles-english";
-const ID_DUB_ENGLISH: &str = "dub-english";
+const ID_SUBTITLES_MIC_NATIVE: &str = "subtitles-microphone-native";
+const ID_SUBTITLES_MIC_TRANSLATED: &str = "subtitles-microphone-translated";
+const ID_SUBTITLES_SYSTEM_NATIVE: &str = "subtitles-system-native";
+const ID_SUBTITLES_SYSTEM_TRANSLATED: &str = "subtitles-system-translated";
+const ID_DUB_SYSTEM_TRANSLATED: &str = "subtitles-system-dub";
 
 fn asr_id(name: &str) -> String {
     format!("asr:{}", name)
@@ -367,25 +372,42 @@ fn build_menu(m: &MenuModel) -> Menu {
     let _ = translation_menu.append(&target_menu);
     let _ = menu.append(&translation_menu);
 
-    let subtitles_menu = Submenu::new("Live System-Audio Subtitles", true);
-    let _ = subtitles_menu.append(&MenuItem::with_id(
-        ID_SUBTITLES_NATIVE,
-        "CrisperWhisper subtitles",
+    let subtitles_menu = Submenu::new("Live Captions", true);
+    let microphone_menu = Submenu::new("Physical microphone mix", true);
+    let _ = microphone_menu.append(&MenuItem::with_id(
+        ID_SUBTITLES_MIC_NATIVE,
+        "Original-language captions",
         true,
         None,
     ));
-    let _ = subtitles_menu.append(&MenuItem::with_id(
-        ID_SUBTITLES_ENGLISH,
-        "Translated English subtitles",
+    let _ = microphone_menu.append(&MenuItem::with_id(
+        ID_SUBTITLES_MIC_TRANSLATED,
+        "Translated captions",
         true,
         None,
     ));
-    let _ = subtitles_menu.append(&MenuItem::with_id(
-        ID_DUB_ENGLISH,
-        "Translated subtitles + LongCat dub",
+    let _ = subtitles_menu.append(&microphone_menu);
+
+    let system_menu = Submenu::new("System playback", true);
+    let _ = system_menu.append(&MenuItem::with_id(
+        ID_SUBTITLES_SYSTEM_NATIVE,
+        "Original-language captions",
         true,
         None,
     ));
+    let _ = system_menu.append(&MenuItem::with_id(
+        ID_SUBTITLES_SYSTEM_TRANSLATED,
+        "Translated captions",
+        true,
+        None,
+    ));
+    let _ = system_menu.append(&MenuItem::with_id(
+        ID_DUB_SYSTEM_TRANSLATED,
+        "Translated captions + LongCat dub",
+        true,
+        None,
+    ));
+    let _ = subtitles_menu.append(&system_menu);
     let _ = menu.append(&subtitles_menu);
 
     let _ = menu.append(&PredefinedMenuItem::separator());
@@ -429,14 +451,40 @@ fn map_event(id: &str, model: &MenuModel) -> Option<TrayEvent> {
     if id == ID_LONGCAT_SEED_INCREMENT {
         return Some(TrayEvent::AdjustLongCatSeed(1));
     }
-    if id == ID_SUBTITLES_NATIVE {
-        return Some(TrayEvent::StartSubtitles(false));
+    if id == ID_SUBTITLES_MIC_NATIVE {
+        return Some(TrayEvent::StartSubtitles {
+            source: "microphone".into(),
+            translate: false,
+            dub: false,
+        });
     }
-    if id == ID_SUBTITLES_ENGLISH {
-        return Some(TrayEvent::StartSubtitles(true));
+    if id == ID_SUBTITLES_MIC_TRANSLATED {
+        return Some(TrayEvent::StartSubtitles {
+            source: "microphone".into(),
+            translate: true,
+            dub: false,
+        });
     }
-    if id == ID_DUB_ENGLISH {
-        return Some(TrayEvent::StartDubbing);
+    if id == ID_SUBTITLES_SYSTEM_NATIVE {
+        return Some(TrayEvent::StartSubtitles {
+            source: "system".into(),
+            translate: false,
+            dub: false,
+        });
+    }
+    if id == ID_SUBTITLES_SYSTEM_TRANSLATED {
+        return Some(TrayEvent::StartSubtitles {
+            source: "system".into(),
+            translate: true,
+            dub: false,
+        });
+    }
+    if id == ID_DUB_SYSTEM_TRANSLATED {
+        return Some(TrayEvent::StartSubtitles {
+            source: "system".into(),
+            translate: true,
+            dub: true,
+        });
     }
     if let Some(name) = id.strip_prefix("asr:") {
         if model.asr_engines.iter().any(|e| e == name) {

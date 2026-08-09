@@ -58,7 +58,7 @@ api_key = ""
 # 127.0.0.1 with the WSL host name/IP (for example alien.local).
 base_url = "http://127.0.0.1:8172"
 mode = "intended"
-language = "en"
+language = "detect"
 chunk_duration = 30.0
 stride = 26.0
 context_words = 12
@@ -81,13 +81,15 @@ mode = "playback"
 mic_forwarder_url = "http://127.0.0.1:8182"
 
 [subtitles]
-# Native system-audio loopback is supplied by vox-mic-forwarder. The regular
-# subtitle lane uses CrisperWhisper directly; the English lane additionally
-# uses the configured local translator.
+# Independent physical-microphone and native system-playback taps are supplied
+# by vox-mic-forwarder. Each caption window has its own non-destructive cursor.
 router_url = "http://127.0.0.1:8182"
 chunk_seconds = 3.0
 font_size = 30.0
 max_lines = 3
+microphone_language = "detect"
+system_language = "detect"
+target_language = "English"
 
 [tts.edge]
 voice = "zh-CN-XiaoxiaoNeural"
@@ -141,7 +143,7 @@ tts = false
 base_url = "http://127.0.0.1:8176/v1"
 api_key = ""
 model = ""
-max_tokens = 256
+max_tokens = 512
 source_language = "auto"
 target_language = "English"
 active_route = "inbound"

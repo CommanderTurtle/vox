@@ -296,25 +296,26 @@ codec stage, but cannot recreate bandwidth absent from the Bluetooth source.
 Restart it after changing Windows' default input/output devices.
 
 The independent WASAPI loopback tap captures `system_audio_device` for
-captions and never enters the routed microphone mix. Health and device data
-are available at `/health` and `/v1/devices`. Capture is fanned into separate
-desktop and `vox-http` consumer lanes, so both processes may remain active and
-request subtitles/dubbing without draining one another's audio windows.
+captions and never enters the routed microphone mix. A second tap captures the
+physical microphone mix before generated audio is injected. Health and device
+data are available at `/health` and `/v1/devices`. Both taps maintain bounded
+history with a cursor per consumer, so any number of desktop and HTTP caption
+clients can coexist without draining one another's audio windows.
 
-## Live system-audio subtitles
+## Independent live caption lanes
 
 Start `vox-mic-forwarder`, CrisperWhisper, and optionally the local translator.
-Then use the tray's **Live System-Audio Subtitles** submenu:
+Then use the tray's **Live Captions** submenu:
 
-- **CrisperWhisper subtitles**: system speaker → intended/literal transcript.
-- **Translated English subtitles**: system speaker → transcript → local
-  translator → final English line.
-- **Translated subtitles + LongCat dub**: the translated final line is spoken
+- **Physical microphone mix**: original-language or translated captions.
+- **System playback**: original-language or translated captions.
+- **System playback → translated captions + LongCat dub**: translated text is spoken
   to the Windows default output. The router clears loopback audio captured
   during playback so the dub cannot recursively transcribe itself.
 
-The native borderless overlay is movable, always on top, and closes with
-Escape. Its rolling-window settings live in executable-local `config.toml`:
+Every native borderless overlay has a visible drag bar and close button, stays
+always on top, and also closes with Escape. Its rolling-window and per-source
+language settings live in executable-local `config.toml`:
 
 ```toml
 [subtitles]
@@ -322,6 +323,9 @@ router_url = "http://127.0.0.1:8182"
 chunk_seconds = 1.5
 font_size = 30.0
 max_lines = 3
+microphone_language = "detect"
+system_language = "detect"
+target_language = "English"
 ```
 
 The router keeps only the newest bounded audio window for each inference pass,
@@ -331,8 +335,8 @@ resolution, and uses DWM-flushed, GPU-backed, vsynced presentation (4.17 ms on
 a 240 Hz panel). It remains DPI-aware through native egui/winit and does not
 use WinUI animation. The router,
 CrisperWhisper model, translator, and LongCat service remain warm between
-windows. The translation parser intentionally keeps only the final meaningful
-model-output line, discarding headings such as “here is your translation.”
+windows. Legitimate multiline translations are preserved while narrow model
+presentation wrappers and Markdown fences are discarded.
 
 ## Local translation
 
@@ -347,7 +351,7 @@ tts = false
 base_url = "http://alien.local:8176/v1"
 api_key = ""
 model = ""
-max_tokens = 256
+max_tokens = 512
 source_language = "auto"
 target_language = "English"
 active_route = "inbound"
@@ -388,28 +392,23 @@ the ASR and TTS forms.
 
 When `model` is blank, Vox selects the first model advertised by the
 configured `/models` route and caches that choice for the process lifetime.
-The bounded completion length keeps short speech translations brief. Source
-speech is delimited and explicitly treated as untrusted data. The literal
-`(translate)` cue is kept immediately before the source text because it
-stabilizes the Qwen checkpoint on mixed-script and noisy Unicode input.
+The bounded completion length keeps speech translations brief. Source speech
+is delimited and explicitly treated as untrusted data.
 If translation fails, Vox logs the failure and safely continues with the
 original transcript/text rather than losing the user's input.
 
 ### Standalone translation runtime
 
-`~/multimedia/translate` loads the existing
-`qwen3_vl_4b_nvfp4_full.safetensors` directly. The checkpoint is a Comfy
-`comfy_quant` Qwen3-VL model, and Comfy's Krea2 wrapper retains its tied output
-projection and supplies text generation. The service duplicates the proven
-`CLIPLoader(type=krea2) -> Generate Text` path: PyTorch attention, default
-template enabled, thinking disabled, and the screenshot's fixed-seed sampling
-settings (`0.7`, top-k `64`, top-p `0.95`, min-p `0.05`, repetition `1.05`).
+`~/multimedia/translate` loads the local EraX Translator V1.0 Q6_K GGUF with
+llama.cpp. `papluca/xlm-roberta-base-language-detection` runs on CPU only when
+a direct text request uses `source_language=auto`; CrisperWhisper handles
+spoken-language identification before audio transcription. EraX's translation-
+only tuning replaces the former general-purpose Qwen-VL prompt flow.
 
-It imports a sparse checkout of Comfy's inference core as a library. It does
-not launch the Comfy application, workflow engine, queue, web server, frontend,
-diffusion model, or VAE. Translation therefore has its own process and GPU
-lifecycle and consumes none of Agents A1's vLLM sequences. The model is
-eager-loaded by default; `/load` and `/unload` provide explicit operator lifecycle control.
+The service does not launch ComfyUI, an agent, a diffusion model, or a cloud
+client. It has its own process and GPU lifecycle and consumes none of Agents
+A1's vLLM sequences. The model is eager-loaded by default; `/load` and
+`/unload` provide explicit operator lifecycle control.
 
 ## Focused CLI paths
 

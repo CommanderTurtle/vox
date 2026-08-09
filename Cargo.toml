@@ -76,6 +76,9 @@ tempfile = "3"
 # Native audio playback/decoding. ISO-MP4 + AAC gives the router direct M4A
 # hoisting without ffmpeg, temporary conversions, or cloud services.
 rodio = { version = "0.20", default-features = false, features = ["wav", "mp3", "symphonia-isomp4", "symphonia-aac", "symphonia-alac"] }
+# Decode hoisted media directly instead of passing Symphonia's recoverable
+# initialization errors through rodio's panic-only compatibility wrapper.
+symphonia = { version = "0.5.5", default-features = false, features = ["wav", "pcm", "mp3", "isomp4", "aac", "alac"] }
 
 # Tiny local API used only by the separately built native microphone router.
 tiny_http = { version = "0.12", optional = true }

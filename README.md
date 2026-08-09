@@ -32,7 +32,7 @@
 - 🌐 **Local Translation Routes** — inbound detect/source → English and outbound English → a selected language, available for speech, selected text, injection, and TTS
 - 🎭 **Named LongCat Voices** — save any number of `.wav`/`.mp3`/`.m4a` + verbatim `.txt` pairs and switch them from the tray or a hotkey
 - 🎚️ **Native Mic Router** — mix multiple Windows input devices with generated speech and send the result to a selectable virtual-microphone endpoint
-- 💬 **Local Live Subtitles** — caption native system audio through CrisperWhisper, with an optional local translate-to-English lane
+- 💬 **Independent Live Captions** — caption the physical microphone mix and native system playback simultaneously, with optional local translation and dubbing
 - 🪶 **Minimal Footprint** — Pure system tray icon, no main window, zero CPU when idle
 - 🌍 **Global Hotkeys** — Fully customizable keybindings for all actions
 - 💻 **Cross-Platform** — Windows, macOS and Linux
@@ -125,8 +125,7 @@ cargo run --release
 
 This fork can use CrisperWhisper 2.0 in intended/non-literal or literal mode, LongCat
 voice cloning with configurable sentence-aware concatenated requests, and a dedicated local
-translation service that reproduces the proven local Qwen text-generation
-path without running ComfyUI. Windows can run the native Vox tray client while
+EraX translation service with deterministic XLM-R language detection. Windows can run the native Vox tray client while
 the model services remain inside WSL or on another private-LAN host.
 
 See **[Local Backends: Windows + WSL](docs/LOCAL_BACKENDS.md)** for the exact
@@ -201,7 +200,7 @@ TTS Output   ▸  Speakers / Clipboard WAV file / Microphone router         (✓
 LongCat Voice Pair ▸ each saved .wav/.mp3/.m4a + verbatim .txt pair       (✓ active)
 LongCat Seed (1024) ▸ − 1 / + 1
 Local Translation ▸ Enable / Inbound / Outbound / target language         (✓ active)
-Live System-Audio Subtitles ▸ CrisperWhisper / Translated English
+Live Captions ▸ Microphone or system playback ▸ Native / translated / dub
 ─────────────
 Toggle Recording
 Settings…

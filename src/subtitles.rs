@@ -1,5 +1,5 @@
-//! Local, always-on-top captions sourced from the microphone router's native
-//! WASAPI system-audio tap.
+//! Independent local caption windows sourced from either the physical
+//! microphone mix or the native WASAPI system-playback tap.
 
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -14,19 +14,45 @@ use crate::tts::longcat_tts::LongCatTtsEngine;
 use crate::tts::playback::{self, AudioFormat};
 use crate::tts::TtsEngine;
 
-pub fn run(translate: bool, dub: bool) -> Result<(), Box<dyn std::error::Error>> {
+pub fn run(source: &str, translate: bool, dub: bool) -> Result<(), Box<dyn std::error::Error>> {
     let manager = ConfigManager::load_or_create()?;
     let config = manager.read().clone();
+    let source = if source.eq_ignore_ascii_case("microphone") || source.eq_ignore_ascii_case("mic")
+    {
+        "microphone"
+    } else {
+        "system"
+    };
+    let source_label = if source == "microphone" {
+        "Microphone"
+    } else {
+        "System audio"
+    };
+    let source_language = if source == "microphone" {
+        config.subtitles.microphone_language.clone()
+    } else {
+        config.subtitles.system_language.clone()
+    };
+    let target_language = config.subtitles.target_language.clone();
     let (tx, rx) = std::sync::mpsc::channel();
     let stop = Arc::new(AtomicBool::new(false));
-    spawn_caption_worker(config.clone(), translate || dub, dub, tx, stop.clone());
+    spawn_caption_worker(
+        config.clone(),
+        source.to_string(),
+        source_language.clone(),
+        target_language.clone(),
+        translate || dub,
+        dub,
+        tx,
+        stop.clone(),
+    );
 
     let title = if dub {
-        "Vox — Live Translated Dubbing"
+        format!("Vox — {source_label} translated dub")
     } else if translate {
-        "Vox — Live English Subtitles"
+        format!("Vox — {source_label} → {target_language}")
     } else {
-        "Vox — Live Subtitles"
+        format!("Vox — {source_label} ({source_language})")
     };
     let high_refresh = HighRefreshGuard::new();
     log::info!(
@@ -35,7 +61,7 @@ pub fn run(translate: bool, dub: bool) -> Result<(), Box<dyn std::error::Error>>
     );
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_title(title)
+            .with_title(&title)
             .with_inner_size([1200.0, 180.0])
             .with_min_inner_size([420.0, 90.0])
             .with_always_on_top()
@@ -45,8 +71,9 @@ pub fn run(translate: bool, dub: bool) -> Result<(), Box<dyn std::error::Error>>
         hardware_acceleration: eframe::HardwareAcceleration::Required,
         ..Default::default()
     };
+    let app_title = title.clone();
     eframe::run_native(
-        title,
+        &title,
         options,
         Box::new(move |_cc| {
             Ok(Box::new(SubtitleApp {
@@ -56,6 +83,8 @@ pub fn run(translate: bool, dub: bool) -> Result<(), Box<dyn std::error::Error>>
                 font_size: config.subtitles.font_size.clamp(14.0, 72.0),
                 max_lines: config.subtitles.max_lines.clamp(1, 10),
                 high_refresh,
+                title: app_title,
+                source_label: source_label.to_string(),
             }))
         }),
     )?;
@@ -69,6 +98,8 @@ struct SubtitleApp {
     font_size: f32,
     max_lines: usize,
     high_refresh: HighRefreshGuard,
+    title: String,
+    source_label: String,
 }
 
 struct HighRefreshGuard {
@@ -164,17 +195,32 @@ impl eframe::App for SubtitleApp {
             .corner_radius(12.0)
             .inner_margin(egui::Margin::same(18))
             .show(ui, |ui| {
-                let response = ui.allocate_response(ui.available_size(), egui::Sense::drag());
-                if response.drag_started() {
-                    ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
-                }
+                ui.horizontal(|ui| {
+                    let width = (ui.available_width() - 40.0).max(120.0);
+                    let drag = ui.add_sized(
+                        [width, 24.0],
+                        egui::Label::new(
+                            egui::RichText::new(&self.title)
+                                .size(14.0)
+                                .color(egui::Color32::LIGHT_GRAY),
+                        )
+                        .sense(egui::Sense::drag()),
+                    );
+                    if drag.drag_started() || drag.dragged() {
+                        ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
+                    }
+                    if ui.button("✕").on_hover_text("Close captions").clicked() {
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    }
+                });
+                ui.separator();
                 let text = if self.lines.is_empty() {
-                    "Listening to system audio…".to_string()
+                    format!("Listening to {}…", self.source_label.to_lowercase())
                 } else {
                     self.lines.iter().cloned().collect::<Vec<_>>().join("\n")
                 };
-                ui.put(
-                    response.rect,
+                ui.add_sized(
+                    ui.available_size(),
                     egui::Label::new(
                         egui::RichText::new(text)
                             .size(self.font_size)
@@ -192,6 +238,9 @@ impl eframe::App for SubtitleApp {
 
 fn spawn_caption_worker(
     config: Config,
+    source: String,
+    source_language: String,
+    target_language: String,
     translate: bool,
     dub: bool,
     sender: std::sync::mpsc::Sender<String>,
@@ -210,13 +259,22 @@ fn spawn_caption_worker(
                 .timeout(Duration::from_secs(45))
                 .build()
                 .expect("subtitle HTTP client");
-            let crisper = CrisperWhisperEngine::new(&config.asr.crisper);
+            let mut crisper_config = config.asr.crisper.clone();
+            crisper_config.language = source_language.clone();
+            let crisper = CrisperWhisperEngine::new(&crisper_config);
             let translator = Translator::new(&config.translate);
             let longcat = LongCatTtsEngine::new(&config.tts.longcat);
             let seconds = config.subtitles.chunk_seconds.clamp(0.5, 15.0);
+            let consumer = format!(
+                "subtitle-{}-{}-{}-{}",
+                std::process::id(),
+                source,
+                if translate { "translated" } else { "native" },
+                if dub { "dub" } else { "text" },
+            );
             let url = format!(
-                "{}/v1/system-audio/take?min_seconds={seconds}&latest_seconds={seconds}",
-                config.subtitles.router_url.trim_end_matches('/')
+                "{}/v1/audio/take?source={source}&consumer={consumer}&min_seconds={seconds}&latest_seconds={seconds}",
+                config.subtitles.router_url.trim_end_matches('/'),
             );
             let mut router_was_down = false;
             while !stop.load(Ordering::Acquire) {
@@ -258,7 +316,15 @@ fn spawn_caption_worker(
                     }
                 };
                 let text = if translate {
-                    match translator.translate(&transcript).await {
+                    let translator_source = if source_language.eq_ignore_ascii_case("detect") {
+                        "auto"
+                    } else {
+                        &source_language
+                    };
+                    match translator
+                        .translate_with(&transcript, translator_source, &target_language)
+                        .await
+                    {
                         Ok(translated) => translated,
                         Err(error) => {
                             log::warn!("Subtitle translation failed: {error}");
@@ -277,11 +343,13 @@ fn spawn_caption_worker(
                             // WASAPI loopback hears the dub. Clear it before
                             // the next chunk so translated speech never feeds
                             // back into its own recognition lane.
-                            let clear_url = format!(
-                                "{}/v1/system-audio/clear",
-                                config.subtitles.router_url.trim_end_matches('/')
-                            );
-                            let _ = client.post(clear_url).send().await;
+                            if source == "system" {
+                                let clear_url = format!(
+                                    "{}/v1/audio/clear?source=system",
+                                    config.subtitles.router_url.trim_end_matches('/')
+                                );
+                                let _ = client.post(clear_url).send().await;
+                            }
                         }
                         Err(error) => log::warn!("Live dubbing synthesis failed: {error}"),
                     }

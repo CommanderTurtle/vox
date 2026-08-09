@@ -59,6 +59,10 @@ remain deliberately local to this member.
 | `POST /v1/transcribe-and-speak` | Multipart audio through STT, optional translation, and TTS |
 | `POST /v1/hoist` | Multipart WAV/MP3/M4A to the configured microphone router (VB-CABLE on Windows) |
 | `POST /v1/playback` | Multipart WAV/MP3/M4A to Windows' current default playback device |
+| `POST /v1/audio/transcribe` | Bounded microphone or system window through STT and optional translation |
+| `POST /v1/audio/dub` | Microphone or system audio through STT, translation, LongCat, then playback/mic/WAV |
+| `POST /v1/audio/clear` | Explicitly discard one source's router buffer |
+| `GET/POST/DELETE /v1/audio/stream` | Cached start/status/stop worker for either source |
 | `POST /v1/system-audio/transcribe` | Bounded latest system-audio window through STT and optional translation |
 | `POST /v1/system-audio/dub` | System audio through STT, translation, LongCat, then playback/mic/WAV |
 | `POST /v1/system-audio/clear` | Explicitly discard the router loopback buffer |
@@ -141,15 +145,21 @@ curl http://alien.local:8180/v1/system-audio/transcribe \
   -H 'Content-Type: application/json' \
   -d '{"seconds":1.5,"mode":"intended","translate":true,"route":"inbound"}'
 
+curl http://alien.local:8180/v1/audio/transcribe \
+  -H 'Content-Type: application/json' \
+  -d '{"source":"microphone","seconds":1.5,"language":"detect","translate":false}'
+
 curl http://alien.local:8180/v1/system-audio/dub \
   -H 'Content-Type: application/json' \
   -d '{"seconds":1.5,"translate":true,"route":"inbound","voice":"Ana","output":"playback"}'
 ```
 
-`output` may be `playback`, `mic`, or `wav`. Desktop Vox and `vox-http` may
+The generic audio routes accept `source=system` or `source=microphone`; the
+older `/v1/system-audio/*` names remain compatibility aliases. `output` may
+be `playback`, `mic`, or `wav`. Desktop Vox and `vox-http` may
 run simultaneously: neither binds the other's port, and both are ordinary
 clients of the one router on `8182`. Desktop and HTTP subtitle consumers have
-independent loopback lanes rather than competing for a destructive queue. The router clears system-loopback audio
+independent cursors rather than competing for a destructive queue. The router clears system-loopback audio
 after default-device playback so a dub cannot feed back into itself.
 
 For high-frequency lightweight clients, start the inference worker once and

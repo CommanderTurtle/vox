@@ -40,6 +40,16 @@ pub struct SubtitleConfig {
     pub font_size: f32,
     #[serde(default = "default_subtitle_max_lines")]
     pub max_lines: usize,
+    /// Spoken language for the physical microphone lane. `detect` performs a
+    /// single Whisper language-ID pass before Crisper transcription.
+    #[serde(default = "default_detect_language")]
+    pub microphone_language: String,
+    /// Spoken language for the physical system-playback lane.
+    #[serde(default = "default_detect_language")]
+    pub system_language: String,
+    /// Target used only by explicitly translated caption/dubbing lanes.
+    #[serde(default = "default_target_language")]
+    pub target_language: String,
 }
 
 fn default_subtitle_chunk_seconds() -> f32 {
@@ -51,6 +61,9 @@ fn default_subtitle_font_size() -> f32 {
 fn default_subtitle_max_lines() -> usize {
     3
 }
+fn default_detect_language() -> String {
+    "detect".to_string()
+}
 
 impl Default for SubtitleConfig {
     fn default() -> Self {
@@ -59,6 +72,9 @@ impl Default for SubtitleConfig {
             chunk_seconds: default_subtitle_chunk_seconds(),
             font_size: default_subtitle_font_size(),
             max_lines: default_subtitle_max_lines(),
+            microphone_language: default_detect_language(),
+            system_language: default_detect_language(),
+            target_language: default_target_language(),
         }
     }
 }
@@ -147,7 +163,7 @@ pub struct CrisperConfig {
     pub base_url: String,
     #[serde(default = "default_crisper_mode")]
     pub mode: String,
-    #[serde(default = "default_language")]
+    #[serde(default = "default_detect_language")]
     pub language: String,
     #[serde(default = "default_crisper_chunk_duration")]
     pub chunk_duration: f32,
@@ -167,9 +183,6 @@ fn default_crisper_base_url() -> String {
 fn default_crisper_mode() -> String {
     "intended".to_string()
 }
-fn default_language() -> String {
-    "en".to_string()
-}
 fn default_crisper_chunk_duration() -> f32 {
     30.0
 }
@@ -188,7 +201,7 @@ impl Default for CrisperConfig {
         Self {
             base_url: default_crisper_base_url(),
             mode: default_crisper_mode(),
-            language: default_language(),
+            language: default_detect_language(),
             chunk_duration: default_crisper_chunk_duration(),
             stride: default_crisper_stride(),
             context_words: default_crisper_context_words(),
@@ -575,7 +588,7 @@ fn default_target_language() -> String {
     "English".to_string()
 }
 fn default_translate_max_tokens() -> u32 {
-    256
+    512
 }
 fn default_translate_active_route() -> String {
     "inbound".to_string()

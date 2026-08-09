@@ -26,11 +26,11 @@ Crisper Translate LongCat Router
 6. text -> translate -> TTS
 7. text -> TTS
 8. file -> configured microphone router (VB-CABLE on Windows) or default playback
-9. system audio -> STT -> optional translate -> text
-10. system audio -> STT -> optional translate -> LongCat -> playback/mic/WAV
+9. microphone or system audio -> STT -> optional translate -> text
+10. microphone or system audio -> STT -> optional translate -> LongCat -> playback/mic/WAV
 
 The streaming contract separates inference cadence from client paint cadence.
-One background worker consumes the dedicated HTTP loopback lane and atomically
+One background worker consumes its selected non-destructive router cursor and atomically
 publishes complete snapshots. GET polling is an in-memory read: the prior text
 remains available with `processing=true` until a new revision is complete.
 

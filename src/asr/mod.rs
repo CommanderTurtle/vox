@@ -112,6 +112,7 @@ impl AsrManager {
     /// Transcribe audio using the active engine, with automatic fallback.
     pub async fn transcribe(&self, audio_wav: &[u8]) -> Result<String, AsrError> {
         let active = self.active.read().expect("active lock poisoned").clone();
+        let mut last_error = None;
 
         // Try active engine first
         if let Some((_, engine)) = self.engines.iter().find(|(n, _)| *n == active) {
@@ -119,6 +120,7 @@ impl AsrManager {
                 Ok(text) => return Ok(text),
                 Err(e) => {
                     log::warn!("Active engine '{}' failed: {}", active, e);
+                    last_error = Some(e);
                 }
             }
         }
@@ -136,12 +138,16 @@ impl AsrManager {
                     }
                     Err(e) => {
                         log::warn!("Fallback engine '{}' failed: {}", name, e);
+                        last_error = Some(e);
                     }
                 }
             }
         }
 
-        Err(AsrError::NoEngineAvailable)
+        match last_error {
+            Some(error) => Err(error),
+            None => Err(AsrError::NoEngineAvailable),
+        }
     }
 }
 

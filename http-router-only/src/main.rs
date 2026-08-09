@@ -246,6 +246,8 @@ struct TranscribeResponse {
 
 #[derive(Debug, Clone, Deserialize)]
 struct SystemAudioRequest {
+    #[serde(default = "default_capture_source")]
+    source: String,
     seconds: Option<f32>,
     mode: Option<String>,
     language: Option<String>,
@@ -260,6 +262,7 @@ struct SystemAudioRequest {
 
 #[derive(Debug, Clone, Serialize)]
 struct SubtitleStreamSnapshot {
+    source: String,
     running: bool,
     processing: bool,
     revision: u64,
@@ -321,6 +324,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/v1/transcribe-and-speak", post(transcribe_and_speak))
         .route("/v1/hoist", post(hoist))
         .route("/v1/playback", post(playback))
+        .route("/v1/audio/transcribe", post(system_audio_transcribe))
+        .route("/v1/audio/dub", post(system_audio_dub))
+        .route("/v1/audio/clear", post(audio_clear))
+        .route(
+            "/v1/audio/stream",
+            get(system_audio_stream_status)
+                .post(system_audio_stream_start)
+                .delete(system_audio_stream_stop),
+        )
         .route("/v1/system-audio/transcribe", post(system_audio_transcribe))
         .route("/v1/system-audio/dub", post(system_audio_dub))
         .route("/v1/system-audio/clear", post(system_audio_clear))
@@ -393,7 +405,8 @@ async fn routes(State(state): State<AppState>) -> Json<Value> {
         "audio_router": {
             "hoist_formats": ["wav", "mp3", "m4a"],
             "outputs": ["playback", "mic", "wav"],
-            "system_audio": ["transcribe", "translate", "dub"],
+            "live_audio_sources": ["microphone", "system"],
+            "live_audio_actions": ["transcribe", "translate", "dub"],
             "streaming": "cached start/status/stop; polls never repeat inference"
         },
         "common_targets": ["English", "Spanish", "French", "German", "Italian", "Portuguese", "Japanese", "Korean", "Mandarin Chinese", "Arabic", "Hindi"]
@@ -626,11 +639,24 @@ async fn system_audio_clear(
     headers: HeaderMap,
 ) -> Result<Json<Value>, ApiError> {
     authorize(&state, &headers)?;
+    clear_router_source(&state, "system").await
+}
+
+async fn audio_clear(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<SystemAudioRequest>,
+) -> Result<Json<Value>, ApiError> {
+    authorize(&state, &headers)?;
+    clear_router_source(&state, capture_source(&request)?).await
+}
+
+async fn clear_router_source(state: &AppState, source: &str) -> Result<Json<Value>, ApiError> {
     let response = state
         .client
-        .post(endpoint(
-            &state.config.backends.router_url,
-            "/v1/system-audio/clear",
+        .post(format!(
+            "{}/v1/audio/clear?source={source}",
+            state.config.backends.router_url.trim_end_matches('/')
         ))
         .send()
         .await
@@ -659,6 +685,7 @@ async fn system_audio_stream_start(
     )
     .to_string();
     let snapshot = Arc::new(RwLock::new(SubtitleStreamSnapshot {
+        source: capture_source(&request)?.to_string(),
         running: true,
         processing: false,
         revision: 0,
@@ -710,6 +737,7 @@ async fn system_audio_stream_status(
             .map_err(|_| ApiError::Internal("subtitle snapshot lock was poisoned".into()))?
             .clone(),
         None => SubtitleStreamSnapshot {
+            source: "system".into(),
             running: false,
             processing: false,
             revision: 0,
@@ -833,11 +861,12 @@ async fn take_router_audio(
     state: &AppState,
     request: &SystemAudioRequest,
 ) -> Result<AudioInput, ApiError> {
+    let source = capture_source(request)?;
     let seconds = request.seconds.unwrap_or(1.5).clamp(0.5, 15.0);
     let response = state
         .client
         .get(format!(
-            "{}/v1/system-audio/take?min_seconds={seconds}&latest_seconds={seconds}&consumer=http",
+            "{}/v1/audio/take?source={source}&min_seconds={seconds}&latest_seconds={seconds}&consumer=http-{source}",
             state.config.backends.router_url.trim_end_matches('/')
         ))
         .send()
@@ -852,7 +881,7 @@ async fn take_router_audio(
     }
     Ok(AudioInput {
         bytes: response.bytes().await.map_err(backend_error)?.to_vec(),
-        filename: "system-audio.wav".into(),
+        filename: format!("{source}-audio.wav"),
         mode: request
             .mode
             .clone()
@@ -865,6 +894,20 @@ async fn take_router_audio(
         voice: request.voice.clone(),
         seed: request.seed,
     })
+}
+
+fn default_capture_source() -> String {
+    "system".into()
+}
+
+fn capture_source(request: &SystemAudioRequest) -> Result<&str, ApiError> {
+    match request.source.trim().to_ascii_lowercase().as_str() {
+        "microphone" | "mic" => Ok("microphone"),
+        "system" | "system-audio" | "playback" => Ok("system"),
+        other => Err(ApiError::BadRequest(format!(
+            "unknown audio source '{other}'; use microphone or system"
+        ))),
+    }
 }
 
 async fn post_router_audio(

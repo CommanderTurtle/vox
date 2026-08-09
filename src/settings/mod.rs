@@ -268,10 +268,12 @@ impl SettingsApp {
                         "Literal / verbatim",
                     );
                 });
-            ui.label("Language:");
-            ui.add(egui::TextEdit::singleline(
+            Self::spoken_language_combo(
+                ui,
+                "crisper-primary-language",
+                "Language",
                 &mut self.config.asr.crisper.language,
-            ));
+            );
             ui.label("Hotwords:");
             ui.add(egui::TextEdit::singleline(
                 &mut self.config.asr.crisper.hotwords,
@@ -293,7 +295,7 @@ impl SettingsApp {
         });
         ui.label(
             egui::RichText::new(
-                "Intended mode cleans spoken disfluencies; literal mode preserves the spoken wording.",
+                "Intended mode cleans spoken disfluencies; literal mode preserves the spoken wording. Detect performs one Whisper language-ID pass, then transcribes once using that language.",
             )
             .small(),
         );
@@ -780,30 +782,60 @@ impl SettingsApp {
         ui.label(egui::RichText::new("Native workflow hotkeys").strong());
         egui::Grid::new("translation_flow_matrix")
             .striped(true)
-            .num_columns(2)
+            .num_columns(4)
             .show(ui, |ui| {
-                for (flow, key) in [
-                    ("Speech → text", self.config.hotkey.record_toggle.as_str()),
+                ui.strong("Input");
+                ui.strong("Transform");
+                ui.strong("Output");
+                ui.strong("Hotkey");
+                ui.end_row();
+                for (input, transform, output, key) in [
                     (
-                        "Speech → translate → text",
+                        "Microphone",
+                        "Crisper",
+                        "Text / clipboard",
+                        self.config.hotkey.record_toggle.as_str(),
+                    ),
+                    (
+                        "Microphone",
+                        "Crisper → translate",
+                        "Text / clipboard",
                         self.config.hotkey.record_translate_text.as_str(),
                     ),
                     (
-                        "Text → translate → text",
+                        "Selected text",
+                        "Translate",
+                        "Text / clipboard",
                         self.config.hotkey.translate_text.as_str(),
                     ),
-                    ("Text → TTS", self.config.hotkey.tts_trigger.as_str()),
                     (
-                        "Text → translate → TTS",
+                        "Selected text",
+                        "None",
+                        "LongCat TTS",
+                        self.config.hotkey.tts_trigger.as_str(),
+                    ),
+                    (
+                        "Selected text",
+                        "Translate",
+                        "LongCat TTS",
                         self.config.hotkey.translate_tts.as_str(),
                     ),
-                    ("Speech → TTS", self.config.hotkey.record_tts.as_str()),
                     (
-                        "Speech → translate → TTS",
+                        "Microphone",
+                        "Crisper",
+                        "LongCat TTS",
+                        self.config.hotkey.record_tts.as_str(),
+                    ),
+                    (
+                        "Microphone",
+                        "Crisper → translate",
+                        "LongCat TTS",
                         self.config.hotkey.record_translate_tts.as_str(),
                     ),
                 ] {
-                    ui.label(flow);
+                    ui.label(input);
+                    ui.label(transform);
+                    ui.label(output);
                     ui.monospace(key);
                     ui.end_row();
                 }
@@ -814,7 +846,7 @@ impl SettingsApp {
         ));
         ui.add_space(10.0);
 
-        ui.label(egui::RichText::new("Live system-audio subtitles").strong());
+        ui.label(egui::RichText::new("Independent live caption lanes").strong());
         ui.horizontal(|ui| {
             ui.label("Microphone router:");
             ui.add(
@@ -834,13 +866,60 @@ impl SettingsApp {
             ui.label("Lines:");
             ui.add(egui::DragValue::new(&mut self.config.subtitles.max_lines).range(1..=10));
         });
-        ui.label(egui::RichText::new("Launch native subtitles, translated subtitles, or translated LongCat dubbing from the tray. The router captures system playback through WASAPI and never mixes that tap back into the virtual microphone.").small());
+        ui.horizontal_wrapped(|ui| {
+            Self::spoken_language_combo(
+                ui,
+                "subtitle-microphone-language",
+                "Microphone source",
+                &mut self.config.subtitles.microphone_language,
+            );
+            Self::spoken_language_combo(
+                ui,
+                "subtitle-system-language",
+                "System source",
+                &mut self.config.subtitles.system_language,
+            );
+            ui.label("Translated target:");
+            ui.add(
+                egui::TextEdit::singleline(&mut self.config.subtitles.target_language)
+                    .desired_width(100.0),
+            );
+        });
+        ui.label(egui::RichText::new("The tray exposes microphone and physical system-playback lanes separately. Each can run native-language and translated windows at the same time; every window owns an independent router cursor and visible close/drag controls.").small());
         ui.add_space(10.0);
 
         ui.label("System prompt:");
         ui.add(egui::TextEdit::multiline(&mut self.config.translate.system_prompt).desired_rows(3));
         ui.label(egui::RichText::new("The translator is instructed to emit only the translated text. Source text is delimited as data, not instructions.").small());
         ui.add_space(12.0);
+    }
+
+    fn spoken_language_combo(ui: &mut egui::Ui, id: &str, label: &str, value: &mut String) {
+        egui::ComboBox::from_id_salt(id)
+            .selected_text(format!("{label}: {value}"))
+            .show_ui(ui, |ui| {
+                for (code, name) in [
+                    ("detect", "Detect automatically"),
+                    ("en", "English"),
+                    ("es", "Spanish"),
+                    ("de", "German"),
+                    ("fr", "French"),
+                    ("it", "Italian"),
+                    ("pt", "Portuguese"),
+                    ("nl", "Dutch"),
+                    ("pl", "Polish"),
+                    ("ru", "Russian"),
+                    ("uk", "Ukrainian"),
+                    ("zh", "Chinese"),
+                    ("ja", "Japanese"),
+                    ("ko", "Korean"),
+                    ("hi", "Hindi"),
+                    ("tr", "Turkish"),
+                    ("ar", "Arabic"),
+                ] {
+                    ui.selectable_value(value, code.to_string(), format!("{name} ({code})"));
+                }
+            });
     }
 
     fn render_language_route(

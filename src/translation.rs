@@ -169,33 +169,51 @@ impl Translator {
             .choices
             .into_iter()
             .next()
-            .and_then(|choice| final_translation_line(&choice.message.content))
+            .and_then(|choice| clean_translation(&choice.message.content))
             .filter(|content| !content.is_empty())
             .ok_or_else(|| TranslationError::InvalidResponse("empty completion".into()))?;
         Ok(translated)
     }
 }
 
-/// Small instruction-tuned text encoders occasionally preface their answer
-/// with a Markdown heading. The requested translation is always the final
-/// meaningful line; ignore blank lines and closing code fences.
-fn final_translation_line(content: &str) -> Option<String> {
-    content
+/// Preserve legitimate multiline translations while stripping the narrow
+/// presentation wrappers that small instruction models sometimes add.
+fn clean_translation(content: &str) -> Option<String> {
+    let mut lines = content
         .lines()
-        .rev()
         .map(str::trim)
-        .find(|line| !line.is_empty() && !line.starts_with("```"))
-        .map(|line| line.to_string())
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>();
+    if lines.first().is_some_and(|line| line.starts_with("```")) {
+        lines.remove(0);
+    }
+    if lines.last().is_some_and(|line| *line == "```") {
+        lines.pop();
+    }
+    if lines.first().is_some_and(|line| {
+        let normalized = line
+            .trim_matches('*')
+            .trim_matches('_')
+            .trim()
+            .to_ascii_lowercase();
+        normalized.ends_with("output:")
+            || normalized == "translation:"
+            || normalized == "translated text:"
+    }) {
+        lines.remove(0);
+    }
+    let content = lines.join("\n");
+    (!content.is_empty()).then_some(content)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::final_translation_line;
+    use super::clean_translation;
 
     #[test]
     fn keeps_only_final_meaningful_translation_line() {
         assert_eq!(
-            final_translation_line(
+            clean_translation(
                 "**Prompt Engineer & Translator Output:**\n\nWhat is Florida sunshine for?\n"
             )
             .as_deref(),
@@ -206,8 +224,16 @@ mod tests {
     #[test]
     fn ignores_a_closing_markdown_fence() {
         assert_eq!(
-            final_translation_line("```text\nNatural translated sentence.\n```").as_deref(),
+            clean_translation("```text\nNatural translated sentence.\n```").as_deref(),
             Some("Natural translated sentence.")
+        );
+    }
+
+    #[test]
+    fn preserves_multiline_translation() {
+        assert_eq!(
+            clean_translation("First sentence.\nSecond sentence.").as_deref(),
+            Some("First sentence.\nSecond sentence.")
         );
     }
 }

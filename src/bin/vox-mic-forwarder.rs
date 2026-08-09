@@ -5,20 +5,28 @@
 //! endpoint. Select the playback side of a virtual audio cable as the output;
 //! applications then use that cable's capture side as their microphone.
 
-use std::io::{BufReader, Cursor, Read, Write};
+use std::collections::{HashMap, VecDeque};
+use std::io::{Cursor, Read, Write};
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, SampleFormat, Stream, StreamConfig};
 use crossbeam::queue::ArrayQueue;
-use rodio::Source;
 use serde::{Deserialize, Serialize};
+use symphonia::core::audio::SampleBuffer;
+use symphonia::core::codecs::{DecoderOptions, CODEC_TYPE_NULL};
+use symphonia::core::errors::Error as SymphoniaError;
+use symphonia::core::formats::FormatOptions;
+use symphonia::core::io::{MediaSourceStream, MediaSourceStreamOptions};
+use symphonia::core::meta::MetadataOptions;
+use symphonia::core::probe::Hint;
 use tiny_http::{Header, Method, Response, Server, StatusCode};
 
 const VB_CABLE_RENDER_MARKER: &str = "cable input";
 const VB_CABLE_CAPTURE_MARKER: &str = "cable output";
 const VB_CABLE_VENDOR_MARKER: &str = "vb-audio";
+const CONSUMER_RETENTION_FRAMES: u64 = 8;
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 struct InputConfig {
@@ -111,11 +119,135 @@ struct Mixer {
     injected_gain: f32,
     output_rate: u32,
     output_channels: usize,
-    system_audio: Option<Arc<ArrayQueue<f32>>>,
-    /// Independent consumer lane for vox-http. Desktop captions and remote
-    /// API clients can therefore run simultaneously without stealing chunks.
-    system_audio_http: Option<Arc<ArrayQueue<f32>>>,
-    system_audio_rate: u32,
+    /// Physical microphone mix before generated audio is added. This gives
+    /// captions a clean microphone lane without LongCat feeding itself.
+    microphone_audio: AudioTap,
+    /// Native WASAPI loopback from the selected physical playback endpoint.
+    /// It is never mixed into the virtual microphone output.
+    system_audio: Option<AudioTap>,
+}
+
+/// One bounded capture history with independent cursors for every consumer.
+/// Subtitle windows therefore never steal chunks from one another, and the
+/// HTTP-only router can observe the same source concurrently.
+#[derive(Clone)]
+struct AudioTap {
+    name: String,
+    sample_rate: u32,
+    capacity: usize,
+    state: Arc<Mutex<AudioTapState>>,
+}
+
+struct AudioTapState {
+    samples: VecDeque<f32>,
+    start_sequence: u64,
+    next_sequence: u64,
+    consumers: HashMap<String, ConsumerCursor>,
+    peak: f32,
+}
+
+struct ConsumerCursor {
+    sequence: u64,
+    last_request: u64,
+}
+
+impl AudioTap {
+    fn new(name: impl Into<String>, sample_rate: u32, queue_seconds: usize) -> Self {
+        Self {
+            name: name.into(),
+            sample_rate,
+            capacity: sample_rate as usize * queue_seconds.clamp(5, 3600),
+            state: Arc::new(Mutex::new(AudioTapState {
+                samples: VecDeque::new(),
+                start_sequence: 0,
+                next_sequence: 0,
+                consumers: HashMap::new(),
+                peak: 0.0,
+            })),
+        }
+    }
+
+    fn push_locked(state: &mut AudioTapState, capacity: usize, sample: f32) {
+        state.peak = (state.peak * 0.94).max(sample.abs());
+        if state.samples.len() == capacity {
+            state.samples.pop_front();
+            state.start_sequence += 1;
+        }
+        state.samples.push_back(sample);
+        state.next_sequence += 1;
+    }
+
+    fn buffered_seconds(&self) -> f32 {
+        self.state
+            .lock()
+            .map(|state| state.samples.len() as f32 / self.sample_rate as f32)
+            .unwrap_or_default()
+    }
+
+    fn peak(&self) -> f32 {
+        self.state
+            .lock()
+            .map(|state| state.peak)
+            .unwrap_or_default()
+    }
+
+    fn clear(&self) -> usize {
+        let mut state = self.state.lock().expect("audio tap lock poisoned");
+        let cleared = state.samples.len();
+        state.samples.clear();
+        state.start_sequence = state.next_sequence;
+        let next = state.next_sequence;
+        for cursor in state.consumers.values_mut() {
+            cursor.sequence = next;
+        }
+        cleared
+    }
+
+    fn take(
+        &self,
+        consumer: &str,
+        minimum_seconds: f32,
+        latest_seconds: Option<f32>,
+    ) -> Result<Option<Vec<u8>>, String> {
+        let minimum = (self.sample_rate as f32 * minimum_seconds) as u64;
+        let keep = latest_seconds.map(|seconds| (self.sample_rate as f32 * seconds) as u64);
+        let mut state = self.state.lock().map_err(|_| "audio tap lock poisoned")?;
+        let request = state.next_sequence;
+        let start = state.start_sequence;
+        let end = state.next_sequence;
+        let cursor = state
+            .consumers
+            .entry(consumer.to_string())
+            .or_insert(ConsumerCursor {
+                sequence: end,
+                last_request: request,
+            });
+        cursor.sequence = cursor.sequence.max(start).min(end);
+        cursor.last_request = request;
+        let mut from = cursor.sequence;
+        if let Some(keep) = keep {
+            from = from.max(end.saturating_sub(keep));
+        }
+        if end.saturating_sub(from) < minimum {
+            return Ok(None);
+        }
+        let offset = from.saturating_sub(start) as usize;
+        let samples = state
+            .samples
+            .iter()
+            .skip(offset)
+            .copied()
+            .collect::<Vec<_>>();
+        if let Some(cursor) = state.consumers.get_mut(consumer) {
+            cursor.sequence = end;
+        }
+        state.consumers.retain(|_, cursor| {
+            end.saturating_sub(cursor.last_request)
+                <= self.capacity as u64 * CONSUMER_RETENTION_FRAMES
+        });
+        drop(state);
+        encode_wav(&samples, self.sample_rate).map(Some)
+    }
 }
 
 /// Stateful linear conversion between independent Windows endpoint rates.
@@ -227,25 +359,17 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     }
 
     let system_audio_rate = config.system_audio_sample_rate.clamp(8_000, 96_000);
-    let system_audio = config.system_audio_enabled.then(|| {
-        Arc::new(ArrayQueue::new(
-            system_audio_rate as usize * config.queue_seconds.clamp(5, 3600),
-        ))
-    });
-    let system_audio_http = system_audio.as_ref().map(|_| {
-        Arc::new(ArrayQueue::new(
-            system_audio_rate as usize * config.queue_seconds.clamp(5, 3600),
-        ))
-    });
+    let system_audio = config
+        .system_audio_enabled
+        .then(|| AudioTap::new("system audio", system_audio_rate, config.queue_seconds));
     let mixer = Mixer {
         inputs: routes,
         injected: Arc::new(ArrayQueue::new(capacity)),
         injected_gain: config.injected_gain,
         output_rate,
         output_channels,
+        microphone_audio: AudioTap::new("physical microphone", output_rate, config.queue_seconds),
         system_audio,
-        system_audio_http,
-        system_audio_rate,
     };
 
     log::info!(
@@ -263,13 +387,13 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     for ((_, device), route) in input_devices.into_iter().zip(mixer.inputs.iter().cloned()) {
         streams.push(build_input_stream(
             &device,
-            route,
+            Some(route),
             output_rate,
             false,
             None,
         )?);
     }
-    if let Some(samples) = &mixer.system_audio {
+    if let Some(tap) = &mixer.system_audio {
         let device = select_output(&host, &config.system_audio_device)?;
         let name = device
             .name()
@@ -280,22 +404,17 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             )
             .into());
         }
-        let route = Route {
-            name: format!("System audio ({name})"),
-            gain: 1.0,
-            samples: samples.clone(),
-        };
         streams.push(build_input_stream(
             &device,
-            route,
-            mixer.system_audio_rate,
+            None,
+            tap.sample_rate,
             true,
-            mixer.system_audio_http.clone(),
+            Some(tap.clone()),
         )?);
         log::info!(
             "System-audio subtitle tap: '{}' at {} Hz",
             name,
-            mixer.system_audio_rate
+            tap.sample_rate
         );
     }
     streams.push(build_output_stream(
@@ -329,8 +448,8 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title(title)
-            .with_inner_size([720.0, 350.0])
-            .with_min_inner_size([520.0, 280.0]),
+            .with_inner_size([760.0, 470.0])
+            .with_min_inner_size([560.0, 360.0]),
         ..Default::default()
     };
     eframe::run_native(
@@ -377,6 +496,42 @@ impl eframe::App for RouterApp {
                 .collect::<Vec<_>>()
                 .join(", ")
         ));
+        let queued_seconds = self.mixer.injected.len() as f32 / self.mixer.output_rate as f32;
+        let queue_capacity_seconds =
+            self.mixer.injected.capacity() as f32 / self.mixer.output_rate as f32;
+        ui.add_space(10.0);
+        egui::Grid::new("router-live-state")
+            .num_columns(2)
+            .spacing([12.0, 7.0])
+            .show(ui, |ui| {
+                ui.label("Physical microphone");
+                ui.add(
+                    egui::ProgressBar::new(self.mixer.microphone_audio.peak().clamp(0.0, 1.0))
+                        .desired_width(420.0)
+                        .show_percentage(),
+                );
+                ui.end_row();
+                ui.label("Hoisted media queue");
+                ui.add(
+                    egui::ProgressBar::new(
+                        (queued_seconds / queue_capacity_seconds.max(0.001)).clamp(0.0, 1.0),
+                    )
+                    .desired_width(420.0)
+                    .text(format!(
+                        "{queued_seconds:.1}s remaining / {queue_capacity_seconds:.0}s"
+                    )),
+                );
+                ui.end_row();
+                if let Some(system) = &self.mixer.system_audio {
+                    ui.label("System playback tap");
+                    ui.add(
+                        egui::ProgressBar::new(system.peak().clamp(0.0, 1.0))
+                            .desired_width(420.0)
+                            .text(format!("{:.1}s buffered", system.buffered_seconds())),
+                    );
+                    ui.end_row();
+                }
+            });
         ui.add_space(16.0);
         ui.label(egui::RichText::new("Hoist media to the virtual microphone").strong());
         ui.horizontal(|ui| {
@@ -394,7 +549,10 @@ impl eframe::App for RouterApp {
         if ui.button("Hoist to microphone").clicked() {
             self.status = match std::fs::read(self.media_path.trim_matches([' ', '\"', '\''])) {
                 Ok(audio) => match enqueue_audio(&audio, &self.mixer) {
-                    Ok(frames) => format!("Queued {frames} audio frames."),
+                    Ok(report) => format!(
+                        "Queued {:.1}s from {} Hz / {} channel(s). The live meter counts down as Vox sends it to CABLE Input.",
+                        report.seconds, report.source_rate, report.source_channels
+                    ),
                     Err(error) => format!("Could not hoist media: {error}"),
                 },
                 Err(error) => format!("Could not read media: {error}"),
@@ -410,6 +568,8 @@ impl eframe::App for RouterApp {
             )
             .small(),
         );
+        ui.ctx()
+            .request_repaint_after(std::time::Duration::from_millis(50));
     }
 }
 
@@ -476,7 +636,7 @@ fn initialize_config(
 
     let recommended_output = output_names
         .iter()
-        .find(|name| is_vb_cable_render(name))
+        .find(|name| is_vb_cable_standard_render(name))
         .map(String::as_str);
     let inputs = choose_inputs(&input_names, default_input.as_deref())?;
     let output = choose_one(
@@ -507,11 +667,17 @@ fn initialize_config(
         let physical_default = default_output
             .as_deref()
             .filter(|name| system_outputs.iter().any(|candidate| candidate == name));
+        let recommended_physical = physical_default.or_else(|| {
+            system_outputs
+                .iter()
+                .find(|name| !looks_virtual(name))
+                .map(String::as_str)
+        });
         let device = choose_one(
             "system-audio playback",
             &system_outputs,
             physical_default,
-            system_outputs.first().map(String::as_str),
+            recommended_physical,
             "Select physical playback device for subtitles",
         )?;
         (true, device)
@@ -673,12 +839,23 @@ fn looks_virtual(name: &str) -> bool {
 
 fn is_vb_cable_render(name: &str) -> bool {
     let name = name.to_ascii_lowercase();
-    name.contains(VB_CABLE_RENDER_MARKER) && name.contains(VB_CABLE_VENDOR_MARKER)
+    name.contains(VB_CABLE_VENDOR_MARKER)
+        && (name.contains(VB_CABLE_RENDER_MARKER)
+            || name.starts_with("cable in ")
+            || name.starts_with("cable in("))
 }
 
 fn is_vb_cable_capture(name: &str) -> bool {
     let name = name.to_ascii_lowercase();
-    name.contains(VB_CABLE_CAPTURE_MARKER) && name.contains(VB_CABLE_VENDOR_MARKER)
+    name.contains(VB_CABLE_VENDOR_MARKER)
+        && (name.contains(VB_CABLE_CAPTURE_MARKER)
+            || name.starts_with("cable out ")
+            || name.starts_with("cable out("))
+}
+
+fn is_vb_cable_standard_render(name: &str) -> bool {
+    let name = name.to_ascii_lowercase();
+    name.contains(VB_CABLE_RENDER_MARKER) && name.contains(VB_CABLE_VENDOR_MARKER)
 }
 
 fn print_devices(host: &cpal::Host) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -706,7 +883,11 @@ fn verify_vb_cable(host: &cpal::Host) -> Result<(), Box<dyn std::error::Error + 
         )?;
     let render = host
         .output_devices()?
-        .find(|device| device.name().is_ok_and(|name| is_vb_cable_render(&name)))
+        .find(|device| {
+            device
+                .name()
+                .is_ok_and(|name| is_vb_cable_standard_render(&name))
+        })
         .ok_or(
             "CABLE Input (VB-Audio Virtual Cable) is not present in Windows playback endpoints",
         )?;
@@ -787,10 +968,10 @@ where
 
 fn build_input_stream(
     device: &Device,
-    route: Route,
+    route: Option<Route>,
     output_rate: u32,
     loopback: bool,
-    mirror: Option<Arc<ArrayQueue<f32>>>,
+    tap: Option<AudioTap>,
 ) -> Result<Stream, Box<dyn std::error::Error + Send + Sync>> {
     // CPAL's WASAPI backend transparently enables LOOPBACK when an input
     // stream is built on an output endpoint. Loopback must use that output
@@ -804,7 +985,11 @@ fn build_input_stream(
     let config = supported.config();
     let channels = config.channels as usize;
     let input_rate = config.sample_rate.0;
-    let error_name = route.name.clone();
+    let error_name = route
+        .as_ref()
+        .map(|route| route.name.clone())
+        .or_else(|| tap.as_ref().map(|tap| tap.name.clone()))
+        .unwrap_or_else(|| "audio input".into());
     let error_callback = move |error| log::error!("Input stream '{error_name}' failed: {error}");
 
     let stream = match format {
@@ -818,8 +1003,8 @@ fn build_input_stream(
                         channels,
                         input_rate,
                         output_rate,
-                        &route.samples,
-                        mirror.as_deref(),
+                        route.as_ref().map(|route| route.samples.as_ref()),
+                        tap.as_ref(),
                         &mut resampler,
                         |sample| sample,
                     )
@@ -838,8 +1023,8 @@ fn build_input_stream(
                         channels,
                         input_rate,
                         output_rate,
-                        &route.samples,
-                        mirror.as_deref(),
+                        route.as_ref().map(|route| route.samples.as_ref()),
+                        tap.as_ref(),
                         &mut resampler,
                         |sample| sample as f32 / 32768.0,
                     )
@@ -858,8 +1043,8 @@ fn build_input_stream(
                         channels,
                         input_rate,
                         output_rate,
-                        &route.samples,
-                        mirror.as_deref(),
+                        route.as_ref().map(|route| route.samples.as_ref()),
+                        tap.as_ref(),
                         &mut resampler,
                         |sample| (sample as f32 - 32768.0) / 32768.0,
                     )
@@ -878,8 +1063,8 @@ fn route_input<T: Copy>(
     channels: usize,
     input_rate: u32,
     output_rate: u32,
-    queue: &ArrayQueue<f32>,
-    mirror: Option<&ArrayQueue<f32>>,
+    queue: Option<&ArrayQueue<f32>>,
+    tap: Option<&AudioTap>,
     resampler: &mut LinearResampler,
     convert: impl Fn(T) -> f32,
 ) {
@@ -887,12 +1072,15 @@ fn route_input<T: Copy>(
         resampler.step,
         input_rate.max(1) as f64 / output_rate.max(1) as f64
     );
+    let mut tap_state = tap.map(|tap| tap.state.lock().expect("audio tap lock poisoned"));
     for frame in data.chunks_exact(channels.max(1)) {
         let mono = frame.iter().copied().map(&convert).sum::<f32>() / frame.len() as f32;
         resampler.push(mono, |sample| {
-            push_latest(queue, sample);
-            if let Some(mirror) = mirror {
-                push_latest(mirror, sample);
+            if let Some(queue) = queue {
+                push_latest(queue, sample);
+            }
+            if let (Some(tap), Some(state)) = (tap, tap_state.as_deref_mut()) {
+                AudioTap::push_locked(state, tap.capacity, sample);
             }
         });
     }
@@ -944,11 +1132,22 @@ fn fill_output<T: Copy>(
     mixer: &Mixer,
     convert: impl Fn(f32) -> T,
 ) {
+    let mut microphone = mixer
+        .microphone_audio
+        .state
+        .lock()
+        .expect("microphone tap lock poisoned");
     for frame in data.chunks_exact_mut(channels.max(1)) {
-        let mut sample = mixer.injected.pop().unwrap_or(0.0) * mixer.injected_gain;
+        let mut physical = 0.0;
         for route in &mixer.inputs {
-            sample += route.samples.pop().unwrap_or(0.0) * route.gain;
+            physical += route.samples.pop().unwrap_or(0.0) * route.gain;
         }
+        AudioTap::push_locked(
+            &mut microphone,
+            mixer.microphone_audio.capacity,
+            physical.clamp(-1.0, 1.0),
+        );
+        let sample = physical + mixer.injected.pop().unwrap_or(0.0) * mixer.injected_gain;
         let sample = convert(sample.clamp(-1.0, 1.0));
         frame.fill(sample);
     }
@@ -972,9 +1171,10 @@ fn serve(bind: &str, mixer: Mixer) -> Result<(), Box<dyn std::error::Error + Sen
                     "output_channels": mixer.output_channels,
                     "inputs": mixer.inputs.iter().map(|route| &route.name).collect::<Vec<_>>(),
                     "injected_frames_queued": mixer.injected.len(),
+                    "injected_seconds_queued": mixer.injected.len() as f32 / mixer.output_rate as f32,
+                    "microphone_audio_seconds_buffered": mixer.microphone_audio.buffered_seconds(),
                     "system_audio_enabled": mixer.system_audio.is_some(),
-                    "system_audio_frames_buffered": mixer.system_audio.as_ref().map(|queue| queue.len()).unwrap_or(0),
-                    "system_audio_http_frames_buffered": mixer.system_audio_http.as_ref().map(|queue| queue.len()).unwrap_or(0),
+                    "system_audio_seconds_buffered": mixer.system_audio.as_ref().map(AudioTap::buffered_seconds).unwrap_or(0.0),
                 })
                 .to_string();
                 let _ = request.respond(json_response(body, StatusCode(200)));
@@ -1008,8 +1208,14 @@ fn serve(bind: &str, mixer: Mixer) -> Result<(), Box<dyn std::error::Error + Sen
                     .read_to_end(&mut audio)
                 {
                     Ok(_) => match enqueue_audio(&audio, &mixer) {
-                        Ok(frames) => {
-                            let body = serde_json::json!({"queued_frames": frames}).to_string();
+                        Ok(report) => {
+                            let body = serde_json::json!({
+                                "queued_frames": report.frames,
+                                "queued_seconds": report.seconds,
+                                "source_rate": report.source_rate,
+                                "source_channels": report.source_channels,
+                                "remaining_seconds": mixer.injected.len() as f32 / mixer.output_rate as f32,
+                            }).to_string();
                             let _ = request.respond(json_response(body, StatusCode(202)));
                         }
                         Err(error) => {
@@ -1029,16 +1235,16 @@ fn serve(bind: &str, mixer: Mixer) -> Result<(), Box<dyn std::error::Error + Sen
                     .read_to_end(&mut audio)
                 {
                     Ok(_) => match decode_audio(&audio) {
-                        Ok(_) => {
+                        Ok(decoded) => {
                             let playback_mixer = mixer.clone();
                             std::thread::spawn(move || {
-                                if let Err(error) = play_audio(&audio) {
+                                if let Err(error) = play_decoded_audio(decoded) {
                                     log::error!("Router playback failed: {error}");
                                 }
                                 // Playback is captured by the WASAPI loopback
                                 // tap. Drop it after playback so subtitle/dub
                                 // consumers never process their own output.
-                                clear_system_audio(&playback_mixer);
+                                clear_audio_source(&playback_mixer, "system");
                             });
                             let _ = request.respond(json_response(
                                 serde_json::json!({"status": "playing"}).to_string(),
@@ -1055,7 +1261,7 @@ fn serve(bind: &str, mixer: Mixer) -> Result<(), Box<dyn std::error::Error + Sen
                 }
             }
             (&Method::Post, "/v1/system-audio/clear") => {
-                let cleared = clear_system_audio(&mixer);
+                let cleared = clear_audio_source(&mixer, "system");
                 let _ = request.respond(json_response(
                     serde_json::json!({"cleared_frames": cleared}).to_string(),
                     StatusCode(200),
@@ -1068,7 +1274,40 @@ fn serve(bind: &str, mixer: Mixer) -> Result<(), Box<dyn std::error::Error + Sen
                 let latest_seconds =
                     query_number(url, "latest_seconds").map(|seconds| seconds.clamp(0.25, 30.0));
                 let consumer = query_text(url, "consumer").unwrap_or("desktop");
-                match take_system_audio(&mixer, minimum_seconds, latest_seconds, consumer) {
+                match take_audio_source(&mixer, "system", minimum_seconds, latest_seconds, consumer)
+                {
+                    Ok(Some(wav)) => {
+                        let header = Header::from_bytes("Content-Type", "audio/wav").unwrap();
+                        let response = Response::from_data(wav)
+                            .with_status_code(StatusCode(200))
+                            .with_header(header);
+                        let _ = request.respond(response);
+                    }
+                    Ok(None) => {
+                        let _ = request.respond(Response::empty(StatusCode(204)));
+                    }
+                    Err(error) => {
+                        let _ = request.respond(text_response(error, StatusCode(409)));
+                    }
+                }
+            }
+            (&Method::Post, url) if url.starts_with("/v1/audio/clear") => {
+                let source = query_text(url, "source").unwrap_or("system").to_string();
+                let cleared = clear_audio_source(&mixer, &source);
+                let _ = request.respond(json_response(
+                    serde_json::json!({"source": source, "cleared_frames": cleared}).to_string(),
+                    StatusCode(200),
+                ));
+            }
+            (&Method::Get, url) if url.starts_with("/v1/audio/take") => {
+                let source = query_text(url, "source").unwrap_or("system");
+                let minimum_seconds = query_number(url, "min_seconds")
+                    .unwrap_or(3.0)
+                    .clamp(0.25, 30.0);
+                let latest_seconds =
+                    query_number(url, "latest_seconds").map(|seconds| seconds.clamp(0.25, 30.0));
+                let consumer = query_text(url, "consumer").unwrap_or("desktop");
+                match take_audio_source(&mixer, source, minimum_seconds, latest_seconds, consumer) {
                     Ok(Some(wav)) => {
                         let header = Header::from_bytes("Content-Type", "audio/wav").unwrap();
                         let response = Response::from_data(wav)
@@ -1113,40 +1352,41 @@ fn query_text<'a>(url: &'a str, key: &str) -> Option<&'a str> {
         .find_map(|(name, value)| (name == key).then_some(value))
 }
 
-fn take_system_audio(
+fn take_audio_source(
     mixer: &Mixer,
+    source: &str,
     minimum_seconds: f32,
     latest_seconds: Option<f32>,
     consumer: &str,
 ) -> Result<Option<Vec<u8>>, String> {
-    let queue = if consumer.eq_ignore_ascii_case("http") {
-        &mixer.system_audio_http
-    } else {
-        &mixer.system_audio
+    audio_tap(mixer, source)?.take(consumer, minimum_seconds, latest_seconds)
+}
+
+fn audio_tap<'a>(mixer: &'a Mixer, source: &str) -> Result<&'a AudioTap, String> {
+    match source.to_ascii_lowercase().as_str() {
+        "microphone" | "mic" => Ok(&mixer.microphone_audio),
+        "system" | "system-audio" | "playback" => mixer
+            .system_audio
+            .as_ref()
+            .ok_or_else(|| "system-audio capture is disabled in mic-forwarder.toml".to_string()),
+        _ => Err(format!(
+            "unknown audio source '{source}'; expected microphone or system"
+        )),
     }
-    .as_ref()
-    .ok_or_else(|| "system-audio capture is disabled in mic-forwarder.toml".to_string())?;
-    let minimum = (mixer.system_audio_rate as f32 * minimum_seconds) as usize;
-    if queue.len() < minimum {
-        return Ok(None);
-    }
-    if let Some(seconds) = latest_seconds {
-        let keep = (mixer.system_audio_rate as f32 * seconds) as usize;
-        while queue.len() > keep {
-            let _ = queue.pop();
-        }
-    }
+}
+
+fn encode_wav(samples: &[f32], sample_rate: u32) -> Result<Vec<u8>, String> {
     let mut wav = Vec::new();
     {
         let spec = hound::WavSpec {
             channels: 1,
-            sample_rate: mixer.system_audio_rate,
+            sample_rate,
             bits_per_sample: 16,
             sample_format: hound::SampleFormat::Int,
         };
         let mut writer = hound::WavWriter::new(Cursor::new(&mut wav), spec)
             .map_err(|error| format!("WAV writer failed: {error}"))?;
-        while let Some(sample) = queue.pop() {
+        for sample in samples {
             writer
                 .write_sample((sample.clamp(-1.0, 1.0) * i16::MAX as f32) as i16)
                 .map_err(|error| format!("WAV encode failed: {error}"))?;
@@ -1155,25 +1395,121 @@ fn take_system_audio(
             .finalize()
             .map_err(|error| format!("WAV finalize failed: {error}"))?;
     }
-    Ok(Some(wav))
+    Ok(wav)
 }
 
-fn decode_audio(audio: &[u8]) -> Result<(Vec<f32>, usize, u32), String> {
-    let decoder = rodio::Decoder::new(BufReader::new(Cursor::new(audio.to_vec())))
-        .map_err(|error| format!("unsupported or invalid WAV/MP3/M4A: {error}"))?;
-    let channels = decoder.channels().max(1) as usize;
-    let sample_rate = decoder.sample_rate();
-    let interleaved = decoder.convert_samples::<f32>().collect::<Vec<_>>();
-    Ok((interleaved, channels, sample_rate))
+struct DecodedAudio {
+    interleaved: Vec<f32>,
+    channels: usize,
+    sample_rate: u32,
 }
 
-fn enqueue_audio(audio: &[u8], mixer: &Mixer) -> Result<usize, String> {
-    let (interleaved, channels, sample_rate) = decode_audio(audio)?;
-    let mono = interleaved
-        .chunks(channels)
+struct EnqueueReport {
+    frames: usize,
+    seconds: f32,
+    source_rate: u32,
+    source_channels: usize,
+}
+
+fn decode_audio(audio: &[u8]) -> Result<DecodedAudio, String> {
+    if audio.is_empty() {
+        return Err("audio body is empty".into());
+    }
+    let mut hint = Hint::new();
+    if audio.starts_with(b"RIFF") {
+        hint.with_extension("wav");
+    } else if audio.starts_with(b"ID3")
+        || audio
+            .get(..2)
+            .is_some_and(|head| head[0] == 0xff && head[1] & 0xe0 == 0xe0)
+    {
+        hint.with_extension("mp3");
+    } else if audio.get(4..8) == Some(b"ftyp") {
+        hint.with_extension("m4a");
+    }
+
+    let stream = MediaSourceStream::new(
+        Box::new(Cursor::new(audio.to_vec())),
+        MediaSourceStreamOptions::default(),
+    );
+    let mut format = symphonia::default::get_probe()
+        .format(
+            &hint,
+            stream,
+            &FormatOptions {
+                enable_gapless: true,
+                ..Default::default()
+            },
+            &MetadataOptions::default(),
+        )
+        .map_err(|error| format!("unsupported or invalid WAV/MP3/M4A: {error}"))?
+        .format;
+    let (track_id, codec_params) = format
+        .tracks()
+        .iter()
+        .find(|track| track.codec_params.codec != CODEC_TYPE_NULL)
+        .map(|track| (track.id, track.codec_params.clone()))
+        .ok_or_else(|| "audio contains no supported track".to_string())?;
+    let mut decoder = symphonia::default::get_codecs()
+        .make(&codec_params, &DecoderOptions::default())
+        .map_err(|error| format!("audio codec is unsupported: {error}"))?;
+    let mut interleaved = Vec::new();
+    let mut channels = 0;
+    let mut sample_rate = 0;
+    loop {
+        let packet = match format.next_packet() {
+            Ok(packet) => packet,
+            Err(SymphoniaError::IoError(error))
+                if error.kind() == std::io::ErrorKind::UnexpectedEof =>
+            {
+                break
+            }
+            Err(SymphoniaError::ResetRequired) => {
+                decoder = symphonia::default::get_codecs()
+                    .make(&codec_params, &DecoderOptions::default())
+                    .map_err(|error| format!("audio decoder reset failed: {error}"))?;
+                continue;
+            }
+            Err(error) => return Err(format!("audio packet read failed: {error}")),
+        };
+        if packet.track_id() != track_id {
+            continue;
+        }
+        let decoded = match decoder.decode(&packet) {
+            Ok(decoded) => decoded,
+            Err(SymphoniaError::DecodeError(_)) => continue,
+            Err(SymphoniaError::IoError(error))
+                if error.kind() == std::io::ErrorKind::UnexpectedEof =>
+            {
+                break
+            }
+            Err(error) => return Err(format!("audio decode failed: {error}")),
+        };
+        let spec = *decoded.spec();
+        channels = spec.channels.count();
+        sample_rate = spec.rate;
+        let mut converted = SampleBuffer::<f32>::new(decoded.capacity() as u64, spec);
+        converted.copy_interleaved_ref(decoded);
+        interleaved.extend_from_slice(converted.samples());
+    }
+    if interleaved.is_empty() || channels == 0 || sample_rate == 0 {
+        return Err("audio decoded to no playable samples".into());
+    }
+    Ok(DecodedAudio {
+        interleaved,
+        channels,
+        sample_rate,
+    })
+}
+
+fn enqueue_audio(audio: &[u8], mixer: &Mixer) -> Result<EnqueueReport, String> {
+    let decoded = decode_audio(audio)?;
+    let mono = decoded
+        .interleaved
+        .chunks(decoded.channels)
         .map(|frame| frame.iter().sum::<f32>() / frame.len() as f32)
         .collect::<Vec<_>>();
-    let ratio = sample_rate as f64 / mixer.output_rate as f64;
+    let ratio = decoded.sample_rate as f64 / mixer.output_rate as f64;
     let output_len = ((mono.len() as f64) / ratio).ceil() as usize;
     if output_len
         > mixer
@@ -1194,31 +1530,30 @@ fn enqueue_audio(audio: &[u8], mixer: &Mixer) -> Result<usize, String> {
             .push(a + (b - a) * fraction)
             .map_err(|_| "injected-audio queue filled unexpectedly".to_string())?;
     }
-    Ok(output_len)
+    Ok(EnqueueReport {
+        frames: output_len,
+        seconds: output_len as f32 / mixer.output_rate as f32,
+        source_rate: decoded.sample_rate,
+        source_channels: decoded.channels,
+    })
 }
 
-fn play_audio(audio: &[u8]) -> Result<(), String> {
+fn play_decoded_audio(audio: DecodedAudio) -> Result<(), String> {
     let (_stream, handle) = rodio::OutputStream::try_default()
         .map_err(|error| format!("could not open the Windows default playback device: {error}"))?;
     let sink = rodio::Sink::try_new(&handle)
         .map_err(|error| format!("could not create playback sink: {error}"))?;
-    let decoder = rodio::Decoder::new(BufReader::new(Cursor::new(audio.to_vec())))
-        .map_err(|error| format!("audio decode failed: {error}"))?;
-    sink.append(decoder.convert_samples::<f32>());
+    sink.append(rodio::buffer::SamplesBuffer::new(
+        audio.channels as u16,
+        audio.sample_rate,
+        audio.interleaved,
+    ));
     sink.sleep_until_end();
     Ok(())
 }
 
-fn clear_system_audio(mixer: &Mixer) -> usize {
-    [&mixer.system_audio, &mixer.system_audio_http]
-        .into_iter()
-        .filter_map(Option::as_ref)
-        .map(|queue| {
-            let count = queue.len();
-            while queue.pop().is_some() {}
-            count
-        })
-        .sum()
+fn clear_audio_source(mixer: &Mixer, source: &str) -> usize {
+    audio_tap(mixer, source).map(AudioTap::clear).unwrap_or(0)
 }
 
 fn json_response(body: String, status: StatusCode) -> Response<Cursor<Vec<u8>>> {
@@ -1283,7 +1618,11 @@ mod tests {
     #[test]
     fn vb_cable_endpoint_markers_tolerate_windows_name_wrappers() {
         assert!(is_vb_cable_render("CABLE Input (VB-Audio Virtual Cable)"));
+        assert!(is_vb_cable_render("CABLE In 16ch (VB-Audio Virtual Cable)"));
         assert!(is_vb_cable_capture("CABLE Output (VB-Audio Virtual Cable)"));
+        assert!(is_vb_cable_capture(
+            "CABLE Out 16ch (VB-Audio Virtual Cable)"
+        ));
         assert!(!is_vb_cable_capture("Headset (Nicholas's AirPods)"));
     }
 }
