@@ -24,15 +24,14 @@ to_windows_path() {
   wslpath -w "$1"
 }
 
-"$powershell_exe" \
-  -NoLogo \
-  -NoProfile \
-  -ExecutionPolicy Bypass \
-  -File "$(to_windows_path "$component_dir/prepare-signing.ps1")" \
-  -CertificatePath "$(to_windows_path "$keys_dir/vox-native-audio-cable.cer")" \
-  -PfxPath "$(to_windows_path "$keys_dir/vox-native-audio-cable.pfx")" \
-  -PasswordPath "$(to_windows_path "$keys_dir/pfx-password.txt")" \
-  -ThumbprintOutputPath "$(to_windows_path "$keys_dir/windows-thumbprint.txt")"
+ps_script="$(to_windows_path "$component_dir/prepare-signing.ps1")"
+certificate="$(to_windows_path "$keys_dir/vox-native-audio-cable.cer")"
+pfx="$(to_windows_path "$keys_dir/vox-native-audio-cable.pfx")"
+password="$(to_windows_path "$keys_dir/pfx-password.txt")"
+thumbprint_output="$(to_windows_path "$keys_dir/windows-thumbprint.txt")"
+
+"$powershell_exe" -NoLogo -NoProfile -Command \
+  "\$source = [IO.File]::ReadAllText('$ps_script'); & ([ScriptBlock]::Create(\$source)) -CertificatePath '$certificate' -PfxPath '$pfx' -PasswordPath '$password' -ThumbprintOutputPath '$thumbprint_output'"
 
 printf '\nWindows signing identity prepared. Thumbprint:\n'
 cat "$keys_dir/windows-thumbprint.txt"
