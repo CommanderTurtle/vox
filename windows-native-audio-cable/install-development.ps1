@@ -116,6 +116,13 @@ else {
     Write-Host 'Test signing is already configured but not active in this running kernel. A reboot is required.'
 }
 
+if (-not $testSigningActive) {
+    Write-Host ''
+    Write-Host 'Restart Windows, select this boot entry, then run install-development.ps1 once more.'
+    Write-Host 'The driver has not been built or signed yet, so the post-restart run performs the only build.'
+    exit 3010
+}
+
 Write-Host 'Building the pinned Microsoft SysVAD adaptation...'
 & (Join-Path $PSScriptRoot 'build.ps1') -Refresh:$Refresh
 
@@ -127,11 +134,6 @@ Write-Host 'Installing the test-signed root audio device...'
 
 Write-Host ''
 Write-Host 'Vox native audio cable development installation finished.'
-if ($testSigningActive) {
-    Write-Host 'Test signing was already active. A reboot is optional unless Windows reports that the device requires one.'
-}
-else {
-    Write-Host 'A reboot is required before Windows can load the test-signed audio driver.'
-}
+Write-Host 'Test signing was active for the installation. A reboot is optional unless Windows reports that the device requires one.'
 Write-Host 'The installer did not reboot the computer and did not add any account to an administrator or signing group.'
 Write-Host 'All Vox private signing keys have already been destroyed; one public verification certificate remains.'

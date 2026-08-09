@@ -201,7 +201,7 @@ new file mode 100644
 index 0000000000000000000000000000000000000000..969a9799695aa58d2670a002619747b36ef833e0
 --- /dev/null
 +++ b/audio/sysvad/EndpointsCommon/voxcable.cpp
-@@ -0,0 +1,132 @@
+@@ -0,0 +1,140 @@
 +#include "voxcable.h"
 +
 +// 100 ms of canonical 48 kHz, stereo, signed 16-bit PCM. Overflow drops the
@@ -210,7 +210,7 @@ index 0000000000000000000000000000000000000000..969a9799695aa58d2670a002619747b3
 +    (VOX_CABLE_SAMPLE_RATE * VOX_CABLE_BYTES_PER_FRAME / 10)
 +#define VOX_CABLE_POOL_TAG 'CxoV'
 +
-+static BYTE*      g_VoxCableBuffer = nullptr;
++static UCHAR*     g_VoxCableBuffer = nullptr;
 +static ULONG      g_VoxCableReadOffset = 0;
 +static ULONG      g_VoxCableWriteOffset = 0;
 +static ULONG      g_VoxCableAvailable = 0;
@@ -225,7 +225,7 @@ index 0000000000000000000000000000000000000000..969a9799695aa58d2670a002619747b3
 +    }
 +
 +    KeInitializeSpinLock(&g_VoxCableLock);
-+    g_VoxCableBuffer = static_cast<BYTE*>(ExAllocatePool2(
++    g_VoxCableBuffer = static_cast<UCHAR*>(ExAllocatePool2(
 +        POOL_FLAG_NON_PAGED,
 +        VOX_CABLE_BUFFER_BYTES,
 +        VOX_CABLE_POOL_TAG));
@@ -245,11 +245,14 @@ index 0000000000000000000000000000000000000000..969a9799695aa58d2670a002619747b3
 +_IRQL_requires_max_(PASSIVE_LEVEL)
 +VOID VoxCableShutdown()
 +{
-+    BYTE* buffer = g_VoxCableBuffer;
++    KIRQL oldIrql;
++    KeAcquireSpinLock(&g_VoxCableLock, &oldIrql);
++    UCHAR* buffer = g_VoxCableBuffer;
 +    g_VoxCableBuffer = nullptr;
 +    g_VoxCableReadOffset = 0;
 +    g_VoxCableWriteOffset = 0;
 +    g_VoxCableAvailable = 0;
++    KeReleaseSpinLock(&g_VoxCableLock, oldIrql);
 +
 +    if (buffer != nullptr)
 +    {
@@ -258,9 +261,9 @@ index 0000000000000000000000000000000000000000..969a9799695aa58d2670a002619747b3
 +}
 +
 +_IRQL_requires_max_(DISPATCH_LEVEL)
-+VOID VoxCableWrite(_In_reads_bytes_(ByteCount) const BYTE* Source, _In_ ULONG ByteCount)
++VOID VoxCableWrite(_In_reads_bytes_(ByteCount) const UCHAR* Source, _In_ ULONG ByteCount)
 +{
-+    if (Source == nullptr || ByteCount == 0 || g_VoxCableBuffer == nullptr)
++    if (Source == nullptr || ByteCount == 0)
 +    {
 +        return;
 +    }
@@ -274,6 +277,11 @@ index 0000000000000000000000000000000000000000..969a9799695aa58d2670a002619747b3
 +
 +    KIRQL oldIrql;
 +    KeAcquireSpinLock(&g_VoxCableLock, &oldIrql);
++    if (g_VoxCableBuffer == nullptr)
++    {
++        KeReleaseSpinLock(&g_VoxCableLock, oldIrql);
++        return;
++    }
 +
 +    const ULONG overflow =
 +        (g_VoxCableAvailable + ByteCount > VOX_CABLE_BUFFER_BYTES)
@@ -300,21 +308,21 @@ index 0000000000000000000000000000000000000000..969a9799695aa58d2670a002619747b3
 +}
 +
 +_IRQL_requires_max_(DISPATCH_LEVEL)
-+VOID VoxCableRead(_Out_writes_bytes_(ByteCount) BYTE* Destination, _In_ ULONG ByteCount)
++VOID VoxCableRead(_Out_writes_bytes_(ByteCount) UCHAR* Destination, _In_ ULONG ByteCount)
 +{
 +    if (Destination == nullptr || ByteCount == 0)
 +    {
 +        return;
 +    }
 +
++    KIRQL oldIrql;
++    KeAcquireSpinLock(&g_VoxCableLock, &oldIrql);
 +    if (g_VoxCableBuffer == nullptr)
 +    {
++        KeReleaseSpinLock(&g_VoxCableLock, oldIrql);
 +        RtlZeroMemory(Destination, ByteCount);
 +        return;
 +    }
-+
-+    KIRQL oldIrql;
-+    KeAcquireSpinLock(&g_VoxCableLock, &oldIrql);
 +
 +    const ULONG available = min(ByteCount, g_VoxCableAvailable);
 +    const ULONG first = min(available, VOX_CABLE_BUFFER_BYTES - g_VoxCableReadOffset);
@@ -359,10 +367,10 @@ index 0000000000000000000000000000000000000000..91c08259382d409da1d22a300b617f93
 +VOID VoxCableShutdown();
 +
 +_IRQL_requires_max_(DISPATCH_LEVEL)
-+VOID VoxCableWrite(_In_reads_bytes_(ByteCount) const BYTE* Source, _In_ ULONG ByteCount);
++VOID VoxCableWrite(_In_reads_bytes_(ByteCount) const UCHAR* Source, _In_ ULONG ByteCount);
 +
 +_IRQL_requires_max_(DISPATCH_LEVEL)
-+VOID VoxCableRead(_Out_writes_bytes_(ByteCount) BYTE* Destination, _In_ ULONG ByteCount);
++VOID VoxCableRead(_Out_writes_bytes_(ByteCount) UCHAR* Destination, _In_ ULONG ByteCount);
 diff --git a/audio/sysvad/TabletAudioSample/micinwavtable.h b/audio/sysvad/TabletAudioSample/micinwavtable.h
 index 64acba00c0c6887f3b5b12538a2eb3d17c278495..c9ddcb7b43ae1af104ca9575024bba75eafde4e2 100644
 --- a/audio/sysvad/TabletAudioSample/micinwavtable.h
@@ -532,5 +540,3 @@ index 0f44c593f0e636b5cd17d00aa1054c64caae6d6d..3c6309da8fd4067fd3ffbf9bb282dabf
      }
      
      return ntStatus;
-
-

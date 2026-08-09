@@ -15,5 +15,10 @@ $DevCon = Get-ChildItem -Path (Join-Path ${env:ProgramFiles(x86)} 'Windows Kits\
 if (-not $DevCon) { throw 'Microsoft DevCon was not found in the WDK Tools directory.' }
 
 & $DevCon.FullName remove 'Root\Sysvad_ComponentizedAudioSample'
-if ($LASTEXITCODE -ne 0) { throw "DevCon removal failed with exit code $LASTEXITCODE." }
-Write-Host 'Removed the Vox native cable device. The test-signing boot policy was not changed.'
+$result = $LASTEXITCODE
+if ($result -notin @(0, 1)) { throw "DevCon removal failed with exit code $result." }
+Write-Host 'Removed all Vox native cable root devices. The test-signing boot policy was not changed.'
+if ($result -eq 1) {
+    Write-Warning 'Windows requires a restart to finish removing the driver device. No reboot was initiated.'
+    exit 3010
+}

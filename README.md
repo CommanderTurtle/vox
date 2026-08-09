@@ -68,10 +68,12 @@ part of an ordinary Vox build:
 cargo build --release --features mic-forwarder --bin vox-mic-forwarder
 ```
 
-Then run `vox-mic-forwarder.exe --init-config`. Its numbered wizard selects
-the physical input microphone and the virtual-cable output and writes the
-executable-local TOML automatically. `--list-devices` marks Windows defaults
-and warns when no virtual audio endpoint is installed.
+After installing the cable, run `vox-mic-forwarder.exe --verify-cable`, then
+`vox-mic-forwarder.exe --init-config`. Verification uses the router's actual
+CPAL/WASAPI enumerator. The numbered wizard recommends **Vox Cable Input**,
+rejects the cable's recording side as a physical input, separately selects the
+real system-audio playback device, and writes executable-local TOML.
+`--list-devices` still provides the complete device inventory.
 
 Vox includes an optional first-party `windows-native-audio-cable` component
 for that missing endpoint. It reproducibly adapts Microsoft's pinned SysVAD

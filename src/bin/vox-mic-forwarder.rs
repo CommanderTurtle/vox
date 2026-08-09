@@ -16,6 +16,9 @@ use rodio::Source;
 use serde::{Deserialize, Serialize};
 use tiny_http::{Header, Method, Response, Server, StatusCode};
 
+const VOX_CABLE_RENDER_MARKER: &str = "vox cable input";
+const VOX_CABLE_CAPTURE_MARKER: &str = "vox cable output";
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 struct InputConfig {
     /// "default", an exact Windows device name, or a unique name fragment.
@@ -114,11 +117,59 @@ struct Mixer {
     system_audio_rate: u32,
 }
 
+/// Stateful linear conversion between independent Windows endpoint rates.
+///
+/// CPAL opens each endpoint in its native shared-mode format. Keeping the
+/// interpolation state across callbacks avoids the audible sample-repeat/drop
+/// behavior of nearest-neighbor conversion when a physical microphone is not
+/// already running at the virtual cable's 48 kHz rate.
+struct LinearResampler {
+    step: f64,
+    previous: Option<f32>,
+    input_index: u64,
+    next_output_position: f64,
+}
+
+impl LinearResampler {
+    fn new(input_rate: u32, output_rate: u32) -> Self {
+        Self {
+            step: input_rate.max(1) as f64 / output_rate.max(1) as f64,
+            previous: None,
+            input_index: 0,
+            next_output_position: 0.0,
+        }
+    }
+
+    fn push(&mut self, sample: f32, mut emit: impl FnMut(f32)) {
+        let Some(previous) = self.previous else {
+            emit(sample);
+            self.previous = Some(sample);
+            self.input_index = 1;
+            self.next_output_position = self.step;
+            return;
+        };
+
+        let current_position = self.input_index as f64;
+        let previous_position = current_position - 1.0;
+        while self.next_output_position <= current_position + f64::EPSILON {
+            let fraction = (self.next_output_position - previous_position).clamp(0.0, 1.0) as f32;
+            emit(previous + (sample - previous) * fraction);
+            self.next_output_position += self.step;
+        }
+        self.previous = Some(sample);
+        self.input_index += 1;
+    }
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
     let host = cpal::default_host();
     if std::env::args().any(|argument| argument == "--list-devices") {
         print_devices(&host)?;
+        return Ok(());
+    }
+    if std::env::args().any(|argument| argument == "--verify-cable") {
+        verify_vox_cable(&host)?;
         return Ok(());
     }
     if std::env::args().any(|argument| argument == "--init-config") {
@@ -135,6 +186,9 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let output_config = supported.config();
     let output_rate = output_config.sample_rate.0;
     let output_channels = output_config.channels as usize;
+    let output_name = output
+        .name()
+        .unwrap_or_else(|_| config.output_device.clone());
     let capacity = output_rate as usize * config.queue_seconds.clamp(5, 3600);
 
     let mut routes = Vec::new();
@@ -146,6 +200,12 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     {
         let device = select_input(&host, &input.name)?;
         let name = device.name().unwrap_or_else(|_| input.name.clone());
+        if is_vox_cable_capture(&name) && is_vox_cable_render(&output_name) {
+            return Err(format!(
+                "'{name}' is the recording side of '{output_name}', not a physical microphone; selecting both would feed the virtual cable into itself"
+            )
+            .into());
+        }
         if input_devices
             .iter()
             .any(|(existing, _): &(String, Device)| existing == &name)
@@ -187,7 +247,6 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         system_audio_rate,
     };
 
-    let output_name = output.name().unwrap_or_else(|_| "unknown output".into());
     log::info!(
         "Routing {} input(s) + Vox injection to '{}' at {} Hz / {} channel(s)",
         mixer.inputs.len(),
@@ -214,6 +273,12 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let name = device
             .name()
             .unwrap_or_else(|_| config.system_audio_device.clone());
+        if name.eq_ignore_ascii_case(&output_name) {
+            return Err(format!(
+                "system_audio_device and output_device both resolve to '{name}'; select physical speakers or headphones for the system-audio tap"
+            )
+            .into());
+        }
         let route = Route {
             name: format!("System audio ({name})"),
             gain: 1.0,
@@ -408,11 +473,16 @@ fn initialize_config(
     println!("Its OUTPUT should be the playback side of a virtual audio cable.");
     println!("Other applications then select that cable's recording side as their microphone.\n");
 
+    let recommended_output = output_names
+        .iter()
+        .find(|name| is_vox_cable_render(name))
+        .map(String::as_str);
     let inputs = choose_inputs(&input_names, default_input.as_deref())?;
     let output = choose_one(
         "output",
         &output_names,
         default_output.as_deref(),
+        recommended_output,
         "Select output device number",
     )?;
     if !looks_virtual(&output) {
@@ -422,12 +492,38 @@ fn initialize_config(
         );
     }
 
+    let system_outputs = output_names
+        .iter()
+        .filter(|name| !name.eq_ignore_ascii_case(&output) && !is_vox_cable_render(name))
+        .cloned()
+        .collect::<Vec<_>>();
+    let (system_audio_enabled, system_audio_device) = if system_outputs.is_empty() {
+        println!(
+            "\nNo separate physical playback endpoint is available; the system-audio subtitle tap is disabled."
+        );
+        (false, default_device())
+    } else {
+        let physical_default = default_output
+            .as_deref()
+            .filter(|name| system_outputs.iter().any(|candidate| candidate == name));
+        let device = choose_one(
+            "system-audio playback",
+            &system_outputs,
+            physical_default,
+            system_outputs.first().map(String::as_str),
+            "Select physical playback device for subtitles",
+        )?;
+        (true, device)
+    };
+
     let config = RouterConfig {
         inputs: inputs
             .into_iter()
             .map(|name| InputConfig { name, gain: 1.0 })
             .collect(),
         output_device: output,
+        system_audio_enabled,
+        system_audio_device,
         ..RouterConfig::default()
     };
     let rendered = format!(
@@ -454,9 +550,11 @@ fn choose_inputs(
     names: &[String],
     default: Option<&str>,
 ) -> Result<Vec<String>, Box<dyn std::error::Error + Send + Sync>> {
-    print_choices("input", names, default);
+    print_choices("input", names, default, None);
     let fallback = default
         .and_then(|name| names.iter().position(|candidate| candidate == name))
+        .filter(|index| !is_vox_cable_capture(&names[*index]))
+        .or_else(|| names.iter().position(|name| !is_vox_cable_capture(name)))
         .unwrap_or(0);
     let answer = prompt(&format!(
         "Select input number(s), comma-separated [{}]: ",
@@ -474,21 +572,30 @@ fn choose_inputs(
         }
         selections
     };
-    Ok(selections
+    let selected = selections
         .into_iter()
         .map(|index| names[index].clone())
-        .collect())
+        .collect::<Vec<_>>();
+    if let Some(name) = selected.iter().find(|name| is_vox_cable_capture(name)) {
+        return Err(format!(
+            "'{name}' is the Vox virtual recording endpoint; choose a physical microphone to avoid a feedback loop"
+        )
+        .into());
+    }
+    Ok(selected)
 }
 
 fn choose_one(
     kind: &str,
     names: &[String],
     default: Option<&str>,
+    recommended: Option<&str>,
     label: &str,
 ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-    print_choices(kind, names, default);
-    let fallback = default
+    print_choices(kind, names, default, recommended);
+    let fallback = recommended
         .and_then(|name| names.iter().position(|candidate| candidate == name))
+        .or_else(|| default.and_then(|name| names.iter().position(|candidate| candidate == name)))
         .unwrap_or(0);
     let answer = prompt(&format!("{label} [{}]: ", fallback + 1))?;
     let index = if answer.trim().is_empty() {
@@ -499,13 +606,20 @@ fn choose_one(
     Ok(names[index].clone())
 }
 
-fn print_choices(kind: &str, names: &[String], default: Option<&str>) {
+fn print_choices(kind: &str, names: &[String], default: Option<&str>, recommended: Option<&str>) {
     println!("{} devices:", capitalize(kind));
     for (index, name) in names.iter().enumerate() {
-        let marker = if Some(name.as_str()) == default {
-            " (Windows default)"
-        } else {
-            ""
+        let marker = match (
+            Some(name.as_str()) == default,
+            Some(name.as_str()) == recommended,
+            is_vox_cable_capture(name),
+        ) {
+            (true, true, _) => " (recommended; Windows default)",
+            (_, true, _) => " (recommended)",
+            (true, _, true) => " (Windows default; do not use as a physical mic)",
+            (true, _, _) => " (Windows default)",
+            (_, _, true) if kind == "input" => " (virtual capture; do not select)",
+            _ => "",
         };
         println!("  {}. {}{}", index + 1, name, marker);
     }
@@ -556,19 +670,59 @@ fn looks_virtual(name: &str) -> bool {
         .any(|marker| name.contains(marker))
 }
 
+fn is_vox_cable_render(name: &str) -> bool {
+    name.to_ascii_lowercase().contains(VOX_CABLE_RENDER_MARKER)
+}
+
+fn is_vox_cable_capture(name: &str) -> bool {
+    name.to_ascii_lowercase().contains(VOX_CABLE_CAPTURE_MARKER)
+}
+
 fn print_devices(host: &cpal::Host) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let inputs = device_names(host.input_devices()?);
     let outputs = device_names(host.output_devices()?);
     let default_input = host.default_input_device().and_then(device_name);
     let default_output = host.default_output_device().and_then(device_name);
-    print_choices("input", &inputs, default_input.as_deref());
-    print_choices("output", &outputs, default_output.as_deref());
+    print_choices("input", &inputs, default_input.as_deref(), None);
+    print_choices("output", &outputs, default_output.as_deref(), None);
     println!("\nNext: run --init-config for a numbered setup wizard.");
     if !outputs.iter().any(|name| looks_virtual(name)) {
         println!(
             "No obvious virtual-cable output was detected. A user-space program cannot create a Windows audio endpoint; install or enable a virtual cable before routing this mix as a microphone."
         );
     }
+    Ok(())
+}
+
+fn verify_vox_cable(host: &cpal::Host) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let capture = host
+        .input_devices()?
+        .find(|device| device.name().is_ok_and(|name| is_vox_cable_capture(&name)))
+        .ok_or("Vox Cable Output is not present in Windows recording endpoints")?;
+    let render = host
+        .output_devices()?
+        .find(|device| device.name().is_ok_and(|name| is_vox_cable_render(&name)))
+        .ok_or("Vox Cable Input is not present in Windows playback endpoints")?;
+
+    let capture_name = capture.name()?;
+    let capture_format = capture.default_input_config()?;
+    let render_name = render.name()?;
+    let render_format = render.default_output_config()?;
+    println!("Vox native cable is visible to the same CPAL/WASAPI enumerator used by the router:");
+    println!(
+        "  recording: '{}' — {} Hz / {} channel(s) / {:?}",
+        capture_name,
+        capture_format.sample_rate().0,
+        capture_format.channels(),
+        capture_format.sample_format()
+    );
+    println!(
+        "  playback:  '{}' — {} Hz / {} channel(s) / {:?}",
+        render_name,
+        render_format.sample_rate().0,
+        render_format.channels(),
+        render_format.sample_format()
+    );
     Ok(())
 }
 
@@ -648,7 +802,7 @@ fn build_input_stream(
 
     let stream = match format {
         SampleFormat::F32 => {
-            let mut phase = 0.0;
+            let mut resampler = LinearResampler::new(input_rate, output_rate);
             device.build_input_stream(
                 &config,
                 move |data: &[f32], _| {
@@ -659,7 +813,7 @@ fn build_input_stream(
                         output_rate,
                         &route.samples,
                         mirror.as_deref(),
-                        &mut phase,
+                        &mut resampler,
                         |sample| sample,
                     )
                 },
@@ -668,7 +822,7 @@ fn build_input_stream(
             )?
         }
         SampleFormat::I16 => {
-            let mut phase = 0.0;
+            let mut resampler = LinearResampler::new(input_rate, output_rate);
             device.build_input_stream(
                 &config,
                 move |data: &[i16], _| {
@@ -679,7 +833,7 @@ fn build_input_stream(
                         output_rate,
                         &route.samples,
                         mirror.as_deref(),
-                        &mut phase,
+                        &mut resampler,
                         |sample| sample as f32 / 32768.0,
                     )
                 },
@@ -688,7 +842,7 @@ fn build_input_stream(
             )?
         }
         SampleFormat::U16 => {
-            let mut phase = 0.0;
+            let mut resampler = LinearResampler::new(input_rate, output_rate);
             device.build_input_stream(
                 &config,
                 move |data: &[u16], _| {
@@ -699,7 +853,7 @@ fn build_input_stream(
                         output_rate,
                         &route.samples,
                         mirror.as_deref(),
-                        &mut phase,
+                        &mut resampler,
                         |sample| (sample as f32 - 32768.0) / 32768.0,
                     )
                 },
@@ -719,20 +873,21 @@ fn route_input<T: Copy>(
     output_rate: u32,
     queue: &ArrayQueue<f32>,
     mirror: Option<&ArrayQueue<f32>>,
-    phase: &mut f64,
+    resampler: &mut LinearResampler,
     convert: impl Fn(T) -> f32,
 ) {
-    let step = output_rate as f64 / input_rate as f64;
+    debug_assert_eq!(
+        resampler.step,
+        input_rate.max(1) as f64 / output_rate.max(1) as f64
+    );
     for frame in data.chunks_exact(channels.max(1)) {
         let mono = frame.iter().copied().map(&convert).sum::<f32>() / frame.len() as f32;
-        *phase += step;
-        while *phase >= 1.0 {
-            push_latest(queue, mono);
+        resampler.push(mono, |sample| {
+            push_latest(queue, sample);
             if let Some(mirror) = mirror {
-                push_latest(mirror, mono);
+                push_latest(mirror, sample);
             }
-            *phase -= 1.0;
-        }
+        });
     }
 }
 
@@ -1085,4 +1240,43 @@ fn cors<R: Read + Send + 'static>(response: Response<R>) -> Response<R> {
             )
             .unwrap(),
         )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn resample(input: &[f32], input_rate: u32, output_rate: u32) -> Vec<f32> {
+        let mut output = Vec::new();
+        let mut resampler = LinearResampler::new(input_rate, output_rate);
+        for sample in input {
+            resampler.push(*sample, |value| output.push(value));
+        }
+        output
+    }
+
+    #[test]
+    fn equal_rates_preserve_every_sample() {
+        assert_eq!(
+            resample(&[0.0, 0.5, -0.5, 1.0], 48_000, 48_000),
+            [0.0, 0.5, -0.5, 1.0]
+        );
+    }
+
+    #[test]
+    fn upsampling_interpolates_instead_of_repeating() {
+        assert_eq!(resample(&[0.0, 1.0, 0.0], 2, 4), [0.0, 0.5, 1.0, 0.5, 0.0]);
+    }
+
+    #[test]
+    fn downsampling_keeps_the_correct_time_positions() {
+        assert_eq!(resample(&[0.0, 1.0, 2.0, 3.0, 4.0], 4, 2), [0.0, 2.0, 4.0]);
+    }
+
+    #[test]
+    fn vox_endpoint_markers_tolerate_windows_name_wrappers() {
+        assert!(is_vox_cable_render("Speakers (Vox Cable Input)"));
+        assert!(is_vox_cable_capture("Microphone (Vox Cable Output)"));
+        assert!(!is_vox_cable_capture("Headset (Nicholas's AirPods)"));
+    }
 }

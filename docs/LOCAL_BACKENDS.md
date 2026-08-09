@@ -227,15 +227,17 @@ only `vox.exe`:
 ```powershell
 cargo build --release --features mic-forwarder --bin vox-mic-forwarder
 .\target\release\vox-mic-forwarder.exe --list-devices
+.\target\release\vox-mic-forwarder.exe --verify-cable
 .\target\release\vox-mic-forwarder.exe --init-config
 ```
 
+`--verify-cable` fails unless the same CPAL/WASAPI enumerator used by the router
+sees both native Vox endpoints, then prints their negotiated formats.
 `--init-config` is an interactive, numbered device wizard. It saves exact
 device names into `mic-forwarder.toml` beside the router executable and does
-not require hand-written TOML. Select one or more physical microphones as
-inputs. For the output, select the playback endpoint of a virtual audio cable;
-the recording endpoint belonging to that cable is what another application
-uses as its microphone.
+not require hand-written TOML. It recommends **Vox Cable Input** as the router
+output, rejects **Vox Cable Output** as a physical input, and separately asks
+for the real playback device used by the system-audio subtitle tap.
 
 If `--list-devices` shows only ordinary speakers/headphones, Windows has no
 virtual microphone path available yet. The Rust router cannot create a Windows
@@ -282,10 +284,13 @@ microphone**. Use `--headless` when only the local HTTP boundary is wanted.
 `POST /v1/playback` sends media to the current Windows default playback
 device. The router opens every configured endpoint in its native Windows
 shared-mode format; it does no codec recompression. It downmixes the microphone
-bus and resamples only when endpoint rates differ. Restart it after changing
-Windows' default input/output devices. Bluetooth headset profile selection
-remains owned by Windows and is therefore the practical quality ceiling for
-AirPods or other Bluetooth microphones.
+bus and uses stateful linear interpolation only when endpoint rates differ.
+The physical microphone's driver flags and hardware DSP are not copied to the
+virtual driver; those remain owned by Windows. Consequently the Hands-Free
+profile Windows exposes is the practical quality ceiling for AirPods and other
+Bluetooth microphones. Vox preserves those captured samples without a second
+codec stage, but cannot recreate bandwidth absent from the Bluetooth source.
+Restart it after changing Windows' default input/output devices.
 
 The independent WASAPI loopback tap captures `system_audio_device` for
 captions and never enters the routed microphone mix. Health and device data

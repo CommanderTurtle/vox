@@ -44,6 +44,14 @@ cd windows-native-audio-cable
 .\build.ps1
 ```
 
+If the matching SDK, WDK build/tools, or Visual Studio DriverKit component is
+missing, `build.ps1` runs `install-wdk-prerequisites.ps1`. That helper requests
+UAC once, verifies the Authenticode signatures on Microsoft's official
+installers, installs the machine-wide components, returns to the ordinary
+PowerShell process, and resumes the build. It resolves Visual Studio and the
+Windows Kits by their machine-wide installation paths; neither the standard
+user nor the administrator account needs a custom developer `PATH`.
+
 Run this from a Windows-local clone or copy of the Vox repository (for example,
 under `C:\Users\<you>\source\vox`), not from a WSL shell or UNC-mounted WSL
 path. WDK, Visual Studio, MSBuild, and driver installation are native Windows
@@ -51,7 +59,7 @@ operations.
 
 The script clones only Microsoft's driver-sample source, checks out the pinned
 revision, applies the reviewed Vox overlay, builds the official solution with
-`SignMode=Off`, and copies the unsigned package to
+the native x64 MSBuild/WDK validation host and `SignMode=Off`, and copies the unsigned package to
 `dist\windows-native-audio-cable`. Building never creates a certificate or
 touches a certificate store.
 
@@ -98,11 +106,14 @@ For the normal Secure Boot path with no Test Mode and normally no reboot:
    .\install-attested.ps1
    ```
 
-   The installer requests UAC elevation, verifies the catalog and every SYS
-   against Windows kernel policy, and creates the root audio device with the
-   WDK's DevCon. It never changes a certificate store or boot policy. It does
-   not request a reboot; if Windows exceptionally returns `3010`, it reports
-   that fact instead of restarting automatically.
+   The installer is designed to be launched by an ordinary, non-administrator
+   user. It requests UAC once and, when necessary, installs and verifies only
+   the official Microsoft SDK/WDK installation tools before it continues; an
+   end user does not need Visual Studio. It then verifies the catalog and every SYS against Windows
+   kernel policy and creates the root audio device with the WDK's DevCon. It
+   never changes a certificate store or boot policy. It does not request a
+   reboot; if Windows exceptionally returns `3010`, it reports that fact
+   instead of restarting automatically.
 
 Microsoft's current attestation workflow is for test audiences and requires an
 EV certificate plus Hardware Dashboard registration. For public retail
@@ -126,12 +137,16 @@ From a normal PowerShell 7 terminal, run:
 The script requests UAC elevation, so an ordinary non-administrator account is
 prompted for the separate administrator account's credentials. It then:
 
-1. builds through the installed Visual Studio/WDK;
-2. queries the running kernel's Code Integrity flags, checks the current BCD
+1. queries the running kernel's Code Integrity flags, checks the current BCD
    entry, and enables `TESTSIGNING` only when it is absent;
-3. signs the package with the ephemeral machine signer described below;
-4. installs the root audio device; and
-5. destroys every Vox private signing key before returning.
+2. if Test Signing is not active yet, stops before building and asks for one
+   restart; rerunning the same command after that restart performs the only
+   build;
+3. builds through the installed Visual Studio/WDK;
+4. signs the package with the ephemeral machine signer described below;
+5. creates exactly one persistent root devnode (or updates the existing one),
+   installs the driver, and verifies that Windows enumerated both endpoints;
+6. destroys every Vox private signing key before returning.
 
 If a previous run was interrupted after creating its signer, the next run
 reuses that signer instead of creating a duplicate. After a successful run,
@@ -140,9 +155,10 @@ verification certificate remains. The script never changes local-group
 membership, never exports a PFX, and never reboots automatically.
 
 The script verifies that BCDEdit actually stored the setting before it creates
-the signer. It also reports the independent UEFI Secure Boot state. When it
-prints **installation finished**, a reboot is required if Test Mode was not
-already active; otherwise it is optional unless device installation requests it.
+the signer. It also reports the independent UEFI Secure Boot state. It never
+builds a package that cannot load in the current kernel: if Test Mode was not
+already active, it exits after configuring the boot entry and the post-restart
+run builds, signs, installs, and verifies the endpoints.
 Test Mode stays enabled because Windows must continue accepting the
 self-signed driver on later boots. If you eventually disable it with
 `bcdedit /set testsigning off`, this development driver will no longer load.
@@ -202,8 +218,9 @@ the partial copy and changes nothing else. If Secure Boot must remain enabled
 and Test Mode is unacceptable, there is no local self-signing bypass: submit
 the package for Microsoft attestation/WHQL signing.
 
-Once Windows is running the **Vox Driver Test** entry, install from an elevated
-PowerShell:
+Once Windows is running the **Vox Driver Test** entry, install from an ordinary
+PowerShell. The script requests UAC and installs any missing official Microsoft
+driver prerequisites before continuing:
 
 ```powershell
 .\install-signed.ps1
@@ -234,8 +251,15 @@ entry and public verification certificate unchanged.
 After Windows exposes both endpoints, rebuild the existing Vox utilities normally and run:
 
 ```powershell
+.\vox-mic-forwarder.exe --verify-cable
 .\vox-mic-forwarder.exe --init-config
 ```
+
+`--verify-cable` uses the exact CPAL/WASAPI enumerator used at runtime and
+prints the playback and recording formats Windows negotiated. The setup wizard
+then recommends **Vox Cable Input** automatically, refuses to select **Vox
+Cable Output** as its own physical input, and separately selects the real
+speaker/headphone endpoint used for system-audio subtitles.
 
 Choose:
 
@@ -243,6 +267,16 @@ Choose:
 - **Vox Cable Input** as the forwarder's output.
 
 Then select **Vox Cable Output** as the microphone in the destination application. Stereo Mix is neither required nor used: it is a capture/loopback endpoint, not a writable virtual microphone sink.
+
+The physical microphone and virtual cable are separate devices, so driver
+flags are not copied from one to the other. Vox captures the physical endpoint
+in Windows' native shared-mode format, converts samples to a mono microphone
+bus with stateful linear interpolation only when rates differ, and writes that
+bus to the 48 kHz cable without codec compression. Windows still owns any
+hardware DSP and Bluetooth profile selection. In particular, an AirPods mic is
+limited by the Hands-Free profile Windows exposes; Vox neither lowers that
+source quality further through a codec nor claims to restore bandwidth that
+Bluetooth did not provide.
 
 ## Maintenance boundary
 
