@@ -21,7 +21,7 @@ Windows identity for installation: NT SERVICE\TrustedInstaller
 Visual Studio component: MSBuild
 Windows Driver Kit components: build targets, SignTool, DevGen, DevCon
 WSL commands: openssl, cp
-Windows PowerShell commands: Import-Certificate, Import-PfxCertificate, icacls
+Windows commands: certutil.exe, Import-PfxCertificate, icacls, signtool
 ```
 
 ## 1. Generate the certificate and private key in WSL
@@ -95,9 +95,7 @@ The installer performs this exact sequence.
 The signing operations correspond to the following Windows commands.
 
 ```powershell
-Import-Certificate `
-  -FilePath C:\path\mycert.crt `
-  -CertStoreLocation Cert:\LocalMachine\Root
+certutil.exe -addstore root C:\path\mycert.cer
 
 Import-PfxCertificate `
   -FilePath C:\path\mycert.pfx `

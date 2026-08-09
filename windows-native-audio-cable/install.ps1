@@ -67,11 +67,10 @@ if (-not $PfxPassword) {
     $PfxPassword = Read-Host 'PFX password' -AsSecureString
 }
 
-$rootCertificate = Import-Certificate `
-    -FilePath $resolvedCertificate `
-    -CertStoreLocation 'Cert:\LocalMachine\Root'
-if (-not $rootCertificate) {
-    throw 'The public certificate was not imported into Cert:\LocalMachine\Root.'
+$rootCertificate = [Security.Cryptography.X509Certificates.X509Certificate2]::new($resolvedCertificate)
+& certutil.exe -addstore root $resolvedCertificate
+if ($LASTEXITCODE -ne 0) {
+    throw 'CertUtil did not import the public certificate into Cert:\LocalMachine\Root.'
 }
 
 $imported = @(Import-PfxCertificate `
@@ -88,7 +87,7 @@ $signer = $imported |
 if (-not $signer) {
     throw 'The PFX did not import a certificate with a private key and the Code Signing EKU.'
 }
-if (@($rootCertificate.Thumbprint) -notcontains $signer.Thumbprint) {
+if ($rootCertificate.Thumbprint -ne $signer.Thumbprint) {
     throw 'The public certificate and the private-key certificate in the PFX do not match.'
 }
 
