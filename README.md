@@ -55,17 +55,26 @@
 ### Build from source
 
 ```bash
-git clone https://github.com/your-username/vox.git
+git clone https://github.com/CommanderTurtle/vox.git
 cd vox
+# The mic forwarder is currently an opt-in binary. Build all but mic:
 cargo build --release
-./target/release/vox
+# Release is then at... ./target/release/vox or vox.exe
 ```
 
 The native Windows microphone router is a separate opt-in binary and is not
 part of an ordinary Vox build:
 
 ```bash
+# Build everything (vox -and- the mic forwarder):
+cargo build --release --features mic-forwarder --bins
+# Build only the mic forwarder on its own:
 cargo build --release --features mic-forwarder --bin vox-mic-forwarder
+
+# View .\windows-native-audio-cable\README.md for organizational signing:
+# Run the automated install for the driver:
+.\windows-native-audio-cable\install-development.ps1
+# It might request reboot. If it does, reboot and run again to finish
 ```
 
 After installing the cable, run `vox-mic-forwarder.exe --verify-cable`, then
