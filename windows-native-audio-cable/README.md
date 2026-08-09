@@ -24,51 +24,11 @@ WSL commands: openssl, cp
 Windows commands: certutil.exe, Import-PfxCertificate, icacls, signtool
 ```
 
-## 1. Generate the certificate and private key in WSL
+## 1. Generate and prepare the signing identity from Administrator-backed WSL
 
-Run this in WSL. Replace the Windows username in the destination path.
-
-```bash
-mkdir -p ~/vox-signing
-cd ~/vox-signing
-
-openssl req -x509 -newkey rsa:3072 -sha256 -days 3650 -nodes \
-  -keyout mycert.key \
-  -out mycert.crt \
-  -subj "/CN=Vox Native Audio Cable" \
-  -addext "keyUsage=critical,digitalSignature" \
-  -addext "extendedKeyUsage=codeSigning"
-
-openssl pkcs12 -export \
-  -out mycert.pfx \
-  -inkey mycert.key \
-  -in mycert.crt \
-  -CSP "Microsoft Enhanced RSA and AES Cryptographic Provider" \
-  -LMK
-
-openssl x509 \
-  -in mycert.crt \
-  -outform DER \
-  -out mycert.cer
-
-mkdir -p /mnt/c/Users/<you>/Desktop/vox-signing
-cp mycert.cer mycert.pfx /mnt/c/Users/<you>/Desktop/vox-signing/
-```
-
-The files have distinct roles.
-
-```text
-mycert.crt: public PEM certificate retained in WSL
-mycert.cer: public DER certificate imported into Cert:\LocalMachine\Root
-mycert.pfx: certificate and private key imported into Cert:\LocalMachine\My
-mycert.key: original private key retained in WSL
-```
-
-## 2. Prepare Windows signing access from Administrator-backed WSL
-
-WSL itself does not modify the Windows certificate stores. This command uses
-WSL interop to invoke Windows CertUtil and Administrator PowerShell under the
-Windows token that launched WSL.
+The root helper creates the ignored `keys/` bundle when it is absent, reuses a
+complete existing bundle, imports it through Windows interop, grants the exact
+private-key ACL, and records the prepared thumbprint.
 
 ```bash
 cd ~/multimedia/vox
@@ -76,7 +36,20 @@ cd ~/multimedia/vox
 cat keys/windows-thumbprint.txt
 ```
 
-The preparation phase performs this exact sequence.
+The files have distinct roles.
+
+```text
+keys/vox-native-audio-cable.crt: public PEM certificate retained in WSL
+keys/vox-native-audio-cable.cer: public DER certificate imported into Cert:\LocalMachine\Root
+keys/vox-native-audio-cable.pfx: certificate and private key imported into Cert:\LocalMachine\My
+keys/vox-native-audio-cable.key: original private key retained in WSL
+keys/pfx-password.txt: generated PFX password retained in WSL
+keys/windows-thumbprint.txt: prepared Windows signing thumbprint
+```
+
+WSL itself does not modify Windows certificate stores. The helper invokes
+Windows CertUtil and Administrator PowerShell under the Windows token that
+launched WSL. The preparation phase performs this exact sequence.
 
 ```text
 1. certutil.exe imports the public CER into Cert:\LocalMachine\Root.
@@ -101,7 +74,15 @@ icacls "C:\ProgramData\Microsoft\Crypto\RSA\MachineKeys\<key-guid>" `
   /grant "NT SERVICE\TrustedInstaller":F
 ```
 
-## 3. Build from an ordinary Windows developer PowerShell
+## 2. Export the tracked tree and build from ordinary Windows PowerShell
+
+A second Git clone is optional. Exporting `HEAD` omits `.git`, the ignored
+private keys, caches, and build products.
+
+```bash
+mkdir -p /mnt/c/Users/<you>/source/vox
+git archive --format=tar HEAD | tar -xf - -C /mnt/c/Users/<you>/source/vox
+```
 
 Do not build under a SYSTEM or impersonated TrustedInstaller token. Build the
 unsigned package under the ordinary Windows developer identity that owns the
@@ -112,7 +93,7 @@ cd C:\path\to\vox
 .\windows-native-audio-cable\build.ps1 -Refresh
 ```
 
-## 4. Sign and install from TrustedInstaller PowerShell
+## 3. Sign and install from TrustedInstaller PowerShell
 
 The preparation phase is complete before the signing shell starts. Its token
 must either use TrustedInstaller as the primary identity or carry the enabled
@@ -140,7 +121,7 @@ Get-ChildItem Cert:\LocalMachine\My |
 signtool sign /fd SHA256 /sm /s My /sha1 <thumbprint> C:\path\package.cat
 ```
 
-## 5. Configure the Vox router
+## 4. Configure the Vox router
 
 ```powershell
 .\target\release\vox-mic-forwarder.exe --verify-cable
