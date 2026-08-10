@@ -61,12 +61,13 @@ Microsoft references: [test-signing boot configuration](https://learn.microsoft.
 
 ## 5. Elevate to TrustedInstaller
 
-Resource 1: https://www.youtube.com/watch?v=Vj1uh89v-Sc&t=1556 (25:56)
-Resource 2: https://www.reddit.com/r/CurseForge/comments/tvg1c6/comment/n1bbttp/
-Resource 3: https://www.virustotal.com/gui/file/467639dfc6a2d61ed7bc4d61549abf60ac23cc89fd6d6da1c68c2c7befdcb604/detection
+- Resource 1: https://www.youtube.com/watch?v=Vj1uh89v-Sc&t=1556 (25:56)
+- Resource 2: https://www.reddit.com/r/CurseForge/comments/tvg1c6/comment/n1bbttp/
+- Resource 3: https://www.virustotal.com/gui/file/467639dfc6a2d61ed7bc4d61549abf60ac23cc89fd6d6da1c68c2c7befdcb604/detection
 
 # Code, in elevated (run-as-administrator) powershell:
 
+```powershell
 # Step 1
 Add-MpPreference -ExclusionProcess "powershell.exe"
 # Step 2
